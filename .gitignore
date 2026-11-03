@@ -54,3 +54,8 @@ repo/
 .claude/worktrees/
 # a global ignore rule may hide the root rules file
 !CLAUDE.md
+# personal and local files never get committed, even inside the re-included folders
+CLAUDE.local.md
+.claude/**/*.local.*
+.claude/**/.env*
+.claude/**/*.log

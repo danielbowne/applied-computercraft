@@ -10,20 +10,22 @@ Rules that hold at every step:
 - Never commit to `main`.
 - Never push before the pre-push review has run (docs-only changes included, unless the owner waives it for that push).
 - Never merge without the owner's explicit yes in this session.
+- Never merge on a red or stale check (see step 7).
 
 ## Order
 
-1. **Branch from fresh origin/main.** `git fetch origin && git switch -c <type>/<slug> origin/main`. Types are conventional-commit types (`feat`, `fix`, `chore`, `docs`, `refactor`). For parallel work, use a worktree under `.claude/worktrees/` (`git worktree add .claude/worktrees/<slug> -b <type>/<slug> origin/main`); that folder is git-ignored.
+1. **Branch from fresh origin/main.** `git fetch origin && git switch -c <type>/<slug> origin/main`. Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `ci`, `build`, `test`, `release`, `perf`. For parallel work, use a worktree under `.claude/worktrees/` (`git worktree add .claude/worktrees/<slug> -b <type>/<slug> origin/main`); that folder is git-ignored.
 2. **Builder.** Hand a self-contained brief to the `builder` agent (`.claude/agents/builder.md`) or do the work directly. The builder commits on the branch and stops; it does not push.
 3. **Gates.** `./gradlew build` with JDK 25. Behaviour changes also get verified on a real NeoForge server with a CC computer next to an AE2 block (see "Testing reality" in `CLAUDE.md`). Lua-visible changes must already carry README and CHANGELOG edits.
 4. **Pre-push review and fixes.** Run the `pre-push-review` skill on the outgoing diff. Fix its findings by default; ask the owner only about product decisions or findings you believe are wrong.
 5. **Push.** `git push -u origin <branch>`, then confirm with `git ls-remote --heads origin <branch>`.
-6. **PR.** Create it with a conventional-commit title under 70 characters and a body written per the `pr-description` skill (long bodies via `--body-file`). Wait for CI (`gh pr checks <n> --watch`).
-7. **Wait for the owner.** Present the PR and ask whether to merge. Do not merge on your own.
-8. **Owner merges, squash only, with an explicit subject and body file:**
+6. **PR.** Create it with a conventional-commit title under 70 characters and a body written per the `pr-description` skill (long bodies via `--body-file`).
+7. **CI and freshness.** Wait for CI (`gh pr checks <n> --watch`). Stop if the `build` check is red, or if the branch is behind `main` (`gh pr view <n> --json mergeStateStatus`): bring `main` in (merge or rebase), push, and wait for CI again. Branch protection requires a PR, one approving review, a passing `build` check and an up-to-date branch; `--admin` bypasses those, so the check discipline here is on us.
+8. **Wait for the owner.** Present the PR and ask whether to merge. Do not merge on your own.
+9. **Owner merges, squash only, with an explicit subject and body file:**
    `gh pr merge <n> --squash --admin --subject "<subject> (#<n>)" --body-file <file>`
-   The `permissions.ask` entry and the `guard-squash-merge` hook both exist to catch a squash without a written body.
-9. **Clean up.** `git switch main` is fine for reading, never for committing. Then `git fetch origin --prune`, delete the local branch with `git branch -D <branch>` (capital D: a squash merge never looks merged to git), and remove any worktree (`git worktree remove .claude/worktrees/<slug>`).
-10. **Release, if this was a release PR.** Follow the `release` skill: tag the merge commit and watch `release.yml`.
+   `--admin` is owner-only and is used only after `build` is green on an up-to-date branch. The `permissions.ask` entry and the `guard-squash-merge` hook exist to catch a squash without a written body.
+10. **Clean up.** First confirm what was merged: `gh pr view <n> --json state,headRefOid` must show `MERGED`, and `git rev-parse <branch>` must equal `headRefOid`. If either differs, stop and tell the owner (the local branch has commits that were not merged). Then `git fetch origin --prune`, delete the local branch with `git branch -D <branch>` (capital D: a squash merge never looks merged to git), and remove any worktree (`git worktree remove .claude/worktrees/<slug>`).
+11. **Release, if this was a release PR.** Follow the `release` skill: tag the merge commit and watch `release.yml`.
 
-`/ship-it` runs steps 4 to 9 for the current branch.
+`/ship-it` runs steps 4 to 10 for the current branch.

@@ -3,6 +3,11 @@
 # session trailers or links, "Generated with <AI tool>" lines). Patterns are shared with the
 # Claude Code hooks in .claude/hooks/_patterns.sh. Enable with:
 #   git config core.hooksPath .githooks
+#
+# Every line is scanned, including lines starting with "#": with `git commit -m`, git keeps them.
+# Scanning stops at the scissors line that `git commit -v` (or commit.verbose) puts above the
+# diff, so a diff that merely mentions the patterns is not rejected. The scissors line uses
+# core.commentChar; git's own template comment lines never match the patterns.
 
 msg_file=$1
 root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
@@ -15,7 +20,18 @@ fi
 # shellcheck source=../.claude/hooks/_patterns.sh
 . "$patterns"
 
-if hit=$(grep -v '^#' "$msg_file" | ai_find_attribution); then
+cc=$(git config core.commentChar 2>/dev/null)
+[ -z "$cc" ] && cc='#'
+
+message=$(awk -v cc="$cc" '
+    BEGIN { tail = " ------------------------ >8 ------------------------" }
+    {
+        if (cc == "auto") { if (length($0) == length(tail) + 1 && substr($0, 2) == tail) exit }
+        else if ($0 == cc tail) exit
+        print
+    }' "$msg_file")
+
+if hit=$(printf '%s\n' "$message" | ai_find_attribution); then
     echo "commit-msg: AI attribution is not allowed in commit messages." >&2
     echo "Offending line: $hit" >&2
     exit 1

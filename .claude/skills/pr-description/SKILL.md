@@ -24,7 +24,7 @@ Plain sentences, no hype adjectives, no "This PR..." opener repeated per section
 Check each and mention the ones that apply:
 
 - **Lua API change:** README (Methods, Filters, Coming from Advanced Peripherals) and CHANGELOG updated in this PR.
-- **Dependency floor change** (`neo_version`, `ae2_version`, `cc_version`, `minecraft_version_range`): say why the code needs the newer version, since the floors are published as minimums in `neoforge.mods.toml`.
+- **Dependency floor change** (`neo_version`, `ae2_version`, `cc_version`): say why the code needs the newer version, since the floors are published as minimums in `neoforge.mods.toml`. A change to `minecraft_version_range` is a different kind of change: it is a bounded range (`[26.1.2,26.2)`), not a minimum, so say which Minecraft versions it now allows.
 - **New config option:** name, default, and the README config table row.
 - **Anything that changes the client-optional promise** (a registry entry, a network payload, a mods.toml side change): this needs README, mods.toml and CurseForge environment changes; call it out at the top.
 

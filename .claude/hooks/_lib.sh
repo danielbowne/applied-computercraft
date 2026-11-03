@@ -1,8 +1,9 @@
 # Shared helpers for the PreToolUse hooks. Source it; do not execute it.
+# Written to run on bash 3.2 (macOS) as well as bash 4+: no case-conversion expansions, no associative arrays.
 #
 # Claude Code hook matchers match the tool name only ("Bash"), never the command text, so each
 # hook receives every Bash call and has to decide for itself whether the command is relevant.
-# Text inside quotes or heredocs must never be mistaken for a command, hence the helpers below.
+# Text inside quotes or heredocs must never be mistaken for a command, hence sanitize_command.
 
 set -u
 
@@ -40,84 +41,124 @@ sys.stdout.write(str(ti.get("command") or ""))' 2>/dev/null)
     return 0
 }
 
-# strip_heredocs: stdin -> stdout, with heredoc bodies (and their terminator lines) removed.
-strip_heredocs() {
+# sanitize_command: stdin -> stdout, one linear awk pass that
+#   - joins backslash-newline continuations into one line,
+#   - removes heredoc bodies and their terminator lines (a heredoc only starts at an unquoted
+#     << or <<-, never at <<< or inside $(( )) arithmetic),
+#   - replaces everything inside '...' and "..." with underscores (newlines too, so a quoted
+#     multi-line string stays on one line), keeping the quote characters.
+# Quote state persists across lines. Backslash escapes are honoured outside single quotes.
+sanitize_command() {
     awk '
-    BEGIN { n = 0; q = 0 }
+    function rep(k) { while (length(U) < k) U = U U; return substr(U, 1, k) }
+    BEGIN { U = "________"; sq = "\047"; mode = ""; arith = 0; nq = 0; qi = 0; incont = 0 }
     {
-        if (q < n) {
+        if (!incont && qi < nq) {              # inside a heredoc body
             line = $0
             sub(/^[ \t]+/, "", line)
             sub(/[ \t\r]+$/, "", line)
-            if (line == delims[q + 1]) q++
+            if (line == delims[qi + 1]) qi++
+            if (qi >= nq) { nq = 0; qi = 0 }
             next
         }
-        print
-        n = 0; q = 0
-        s = $0
-        while (match(s, /<<-?[ \t]*[\\"\047]*[A-Za-z_][A-Za-z0-9_]*/)) {
-            m = substr(s, RSTART, RLENGTH)
-            prev = (RSTART > 1) ? substr(s, RSTART - 1, 1) : ""
-            s = substr(s, RSTART + RLENGTH)
-            if (prev == "<") continue   # here-string (<<<), not a heredoc
-            sub(/^<<-?[ \t]*[\\"\047]*/, "", m)
-            delims[++n] = m
+        s = $0; n = length(s); out = ""; i = 1; cont = 0
+        while (i <= n) {
+            if (mode == "s") {
+                rest = substr(s, i)
+                p = index(rest, sq)
+                if (p > 0) { out = out rep(p - 1) sq; mode = ""; i += p }
+                else { out = out rep(length(rest)); i = n + 1 }
+                continue
+            }
+            if (mode == "d") {
+                rest = substr(s, i)
+                if (match(rest, /[\\"]/)) {
+                    out = out rep(RSTART - 1)
+                    k = i + RSTART - 1
+                    if (substr(s, k, 1) == "\\") {
+                        if (k == n) { cont = 1; i = n + 1 }
+                        else { out = out "__"; i = k + 2 }
+                    } else { out = out "\""; mode = ""; i = k + 1 }
+                } else { out = out rep(length(rest)); i = n + 1 }
+                continue
+            }
+            c = substr(s, i, 1)
+            if (c == "\\") {
+                if (i == n) { cont = 1; i = n + 1 }
+                else { out = out substr(s, i, 2); i += 2 }
+                continue
+            }
+            if (c == sq) { mode = "s"; out = out c; i++; continue }
+            if (c == "\"") { mode = "d"; out = out c; i++; continue }
+            if (c == "(") {
+                if (arith > 0) arith++
+                else if (substr(s, i, 2) == "((") { arith = 2; out = out "(("; i += 2; continue }
+            } else if (c == ")" && arith > 0) {
+                arith--
+            } else if (c == "<" && arith == 0 && substr(s, i, 2) == "<<") {
+                prev = (i > 1) ? substr(s, i - 1, 1) : ""
+                if (prev == "<" || substr(s, i + 2, 1) == "<") { out = out "<<"; i += 2; continue }   # here-string
+                j = i + 2
+                if (substr(s, j, 1) == "-") j++
+                while (substr(s, j, 1) ~ /[ \t]/) j++
+                q = substr(s, j, 1)
+                d = ""
+                if (q == sq || q == "\"") {
+                    j++
+                    while (j <= n && substr(s, j, 1) != q) { d = d substr(s, j, 1); j++ }
+                    j++
+                } else {
+                    if (q == "\\") j++
+                    while (j <= n && substr(s, j, 1) ~ /[A-Za-z0-9_.-]/) { d = d substr(s, j, 1); j++ }
+                }
+                if (d != "") { delims[++nq] = d; out = out "<<H"; i = j; continue }
+                out = out "<<"; i += 2; continue
+            }
+            out = out c; i++
         }
-    }'
+        incont = cont
+        arith = 0
+        if (cont) printf "%s", out
+        else if (mode != "") printf "%s_", out
+        else print out
+    }
+    END { if (incont) printf "\n" }'
 }
 
-# mask_quotes: replace everything inside '...' and "..." with underscores (newlines too, so a
-# quoted multi-line string stays on one line), keeping the quote characters. Backslash escapes
-# are honoured outside single quotes. Argument in, result on stdout.
-mask_quotes() {
-    local s=$1 out="" c i n=${#1} mode=""
-    for ((i = 0; i < n; i++)); do
-        c=${s:i:1}
-        case $mode in
-            s)
-                if [[ $c == "'" ]]; then mode=""; out+="'"; else out+="_"; fi
-                ;;
-            d)
-                if [[ $c == '\' ]]; then
-                    out+="__"; ((i++))
-                elif [[ $c == '"' ]]; then
-                    mode=""; out+='"'
-                else
-                    out+="_"
-                fi
-                ;;
-            *)
-                if [[ $c == '\' ]]; then
-                    out+="$c${s:i+1:1}"; ((i++))
-                elif [[ $c == "'" ]]; then
-                    mode=s; out+="'"
-                elif [[ $c == '"' ]]; then
-                    mode=d; out+='"'
-                else
-                    out+="$c"
-                fi
-                ;;
+# command_segments: reads $cmd, sanitizes it, and prints one simple command per line
+# (split on ; & | ( ) backtick and newline).
+command_segments() {
+    printf '%s\n' "$cmd" | sanitize_command | tr ';&|()`' '\n\n\n\n\n\n'
+}
+
+# gh_args <segment>: if the segment runs gh (possibly behind shell keywords such as then/do/!,
+# env assignments, wrappers such as env/sudo/timeout/nice/nohup/rtk, a path like /usr/bin/gh or
+# a backslash like \gh), print " <args after gh>" and return 0. Otherwise return 1.
+gh_args() {
+    local tok t skip=0 found=0 args=""
+    set -f
+    for tok in $1; do
+        if [ "$found" -eq 1 ]; then
+            args="$args $tok"
+            continue
+        fi
+        if [ "$skip" -eq 1 ]; then
+            skip=0
+            continue
+        fi
+        t=${tok#\\}
+        case $t in
+            then | do | else | elif | if | while | until | '{' | '!' | time | env | sudo | command | exec | nohup | rtk | xargs | nice | timeout | stdbuf | ionice | setsid) ;;
+            -u | -g | -C | -U | -D) skip=1 ;;
+            -*) ;;
+            [A-Za-z_]*=*) ;;
+            [0-9]*) ;;
+            gh | */gh) found=1 ;;
+            *) set +f; return 1 ;;
         esac
     done
-    printf '%s' "$out"
-}
-
-# command_segments: reads $cmd, removes heredoc bodies, masks quotes, and prints one simple
-# command per line (split on ; & | ( ) backtick and newline).
-command_segments() {
-    local stripped masked
-    stripped=$(printf '%s\n' "$cmd" | strip_heredocs)
-    masked=$(mask_quotes "$stripped")
-    printf '%s\n' "$masked" | tr ';&|()`' '\n\n\n\n\n\n'
-}
-
-# gh_args <segment>: if the segment is a gh invocation (optionally behind env assignments or
-# wrappers like sudo/env/rtk), print everything after `gh` and return 0. Otherwise return 1.
-gh_args() {
-    local re='^[[:space:]]*(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|env|sudo|command|time|nohup|exec|rtk|xargs)[[:space:]]+)*gh([[:space:]]+(.*))?$'
-    if [[ $1 =~ $re ]]; then
-        printf '%s' "${BASH_REMATCH[4]}"
-        return 0
-    fi
-    return 1
+    set +f
+    [ "$found" -eq 1 ] || return 1
+    printf '%s' "$args"
+    return 0
 }

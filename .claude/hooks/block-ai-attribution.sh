@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# PreToolUse hook (matcher: Bash). Blocks gh commands that write to GitHub (PR, issue, release
-# create/edit/comment/review/merge, and gh api writes) when the command text contains AI
+# PreToolUse hook (matcher: Bash). Blocks gh commands that write to GitHub (PR, issue, release,
+# gist and repo-description writes, and gh api writes) when the command text contains AI
 # attribution: a Co-Authored-By trailer naming an AI tool, a Claude-Session: line, a
-# claude.ai session link, a "Generated/Written/Created with <AI tool>" line, or a vendor
+# claude.ai/code/session link, a "Generated/Written/Created with <AI tool>" line, or a vendor
 # noreply address. Patterns live in _patterns.sh (shared with .githooks/commit-msg).
 #
 # What is scanned: the full command text, heredoc bodies included (that is where PR bodies
 # usually are). What is NOT scanned: the contents of a file passed with --body-file / -F, because
-# the hook only sees the command line. Read-only gh commands are never blocked.
+# the hook only sees the command line. Read-only gh commands are never blocked; `gh api graphql`
+# counts as a write only when the query contains a mutation.
+# Known limits: gh behind bash -c "...", a $(...) inside double quotes, and gh aliases.
+# Runs on bash 3.2 and newer.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
@@ -15,29 +18,39 @@ read_event
 
 # is_gh_write <args after gh>: true when the gh invocation writes to GitHub.
 is_gh_write() {
-    local args=$1 tok prev="" m
+    local args=$1 tok prev="" m method="" has_field=0 method_uc
     local padded=" $args "
-    local re_sub='[[:space:]](pr[[:space:]]+(create|edit|comment|review|merge)|issue[[:space:]]+(create|edit|comment)|release[[:space:]]+(create|edit))[[:space:]]'
+    local re_sub='[[:space:]](pr[[:space:]]+(create|edit|comment|review|merge|close|reopen)|issue[[:space:]]+(create|edit|comment|close|reopen)|release[[:space:]]+(create|edit)|gist[[:space:]]+(create|edit)|repo[[:space:]]+edit)[[:space:]]'
     if [[ $padded =~ $re_sub ]]; then return 0; fi
     if [[ $padded =~ [[:space:]]api[[:space:]] ]]; then
+        if [[ $padded =~ [[:space:]]graphql[[:space:]] ]]; then
+            # a query is a read; only a mutation writes
+            [[ $cmd =~ (^|[^[:alnum:]_])mutation([^[:alnum:]_]|$) ]] && return 0
+            return 1
+        fi
         set -f
         for tok in $args; do
+            m=""
             case $tok in
-                -X[A-Za-z]* | --method=*)
-                    m=${tok#-X}; m=${m#--method=}
-                    if [[ ${m^^} =~ ^(POST|PATCH|PUT)$ ]]; then set +f; return 0; fi
-                    ;;
-                -f | -F | --field | --raw-field | --input | -f* | -F* | --field=* | --raw-field=* | --input=*)
-                    set +f; return 0 ;;
+                -X?*) m=${tok#-X} ;;
+                --method=*) m=${tok#--method=} ;;
             esac
+            [ -n "$m" ] && method=$m
             case $prev in
-                -X | --method)
-                    if [[ ${tok^^} =~ ^(POST|PATCH|PUT)$ ]]; then set +f; return 0; fi
-                    ;;
+                -X | --method) method=$tok ;;
+            esac
+            case $tok in
+                -f | -F | --field | --raw-field | --input | -f?* | -F?* | --field=* | --raw-field=* | --input=*) has_field=1 ;;
             esac
             prev=$tok
         done
         set +f
+        method_uc=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
+        case $method_uc in
+            POST | PATCH | PUT | DELETE) return 0 ;;
+            GET | HEAD) return 1 ;;
+        esac
+        [ "$has_field" -eq 1 ] && return 0
     fi
     return 1
 }

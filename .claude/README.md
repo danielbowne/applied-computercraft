@@ -16,7 +16,7 @@ Shared Claude Code setup for this repo. Everything here is committed so every co
 | `workflows/pre-push-review.js` | The Workflow script behind the pre-push review |
 | `hooks/` | `guard-squash-merge.sh`, `block-ai-attribution.sh`, and the shared `_lib.sh` / `_patterns.sh` |
 
-`.claude/worktrees/` and `settings.local.json` are git-ignored.
+`.claude/worktrees/`, `settings.local.json`, other `*.local.*` files, `.env*` and `*.log` under `.claude/` are git-ignored.
 
 ## The flow
 
@@ -24,7 +24,7 @@ Shared Claude Code setup for this repo. Everything here is committed so every co
 2. A builder (or you) commits the change and the gates pass; builders stop at the commit.
 3. Pre-push review runs on `origin/main...HEAD`; findings are fixed by default.
 4. Push, then open a PR with a body written per the `pr-description` skill.
-5. The owner merges: `gh pr merge <n> --squash --admin --subject "<subject> (#<n>)" --body-file <file>`. Then clean up (`git branch -D`, prune, remove the worktree) and cut a release if it was a release PR.
+5. The owner merges, only after `build` is green on an up-to-date branch: `gh pr merge <n> --squash --admin --subject "<subject> (#<n>)" --body-file <file>`. Then clean up (check the PR shows `MERGED` and the head SHA matches, then `git branch -D`, prune, remove the worktree) and cut a release if it was a release PR.
 
 Details: `skills/ship-flow/SKILL.md`.
 
@@ -32,15 +32,24 @@ Details: `skills/ship-flow/SKILL.md`.
 
 | Where | What runs | Catches |
 |---|---|---|
-| On commit (git hooks) | `.githooks/pre-commit` | commits on `main` |
-| On commit (git hooks) | `.githooks/commit-msg` | AI attribution in the commit message |
+| On commit (git hooks, opt-in) | `.githooks/pre-commit` | commits on `main` (version branches such as `mc-26.2` are allowed by design) |
+| On commit (git hooks, opt-in) | `.githooks/commit-msg` | AI attribution anywhere in the commit message, above the `git commit -v` scissors line |
 | On Claude `gh` commands | `settings.json` `permissions.ask` | every `gh pr merge` needs a confirmation |
 | On Claude `gh` commands | `hooks/guard-squash-merge.sh` | a squash merge without `--body-file` / `--body` |
-| On Claude `gh` commands | `hooks/block-ai-attribution.sh` | AI attribution in `gh` write commands (PR, issue, release, `gh api` writes) |
+| On Claude `gh` commands | `hooks/block-ai-attribution.sh` | AI attribution in `gh` write commands (PR, issue, release, gist, repo description, `gh api` writes) |
 | In CI | `.github/workflows/build.yml` | `./gradlew build` on every push and PR |
-| In CI | `.github/workflows/release.yml` | tag equals `mod_version`, CHANGELOG section exists, build, GitHub Release, CurseForge |
+| In CI | `.github/workflows/release.yml` | tag equals `mod_version`, CHANGELOG section exists, build, GitHub Release |
+| In CI (once PR #2 is merged) | the CurseForge step in `release.yml` | uploads the jar when `CURSEFORGE_PROJECT_ID` is set |
 
-Limits worth knowing: the attribution hook only reads the command line, so the contents of a `--body-file` are not scanned. Hook matchers match the tool name only, so the scripts filter the command text themselves, masking quoted strings and heredoc bodies so that text which merely mentions a command is not mistaken for one. Without `jq` or `python3` the hooks run degraded and fail closed for `gh pr merge`.
+### Limits worth knowing
+
+- The git hooks only run after `git config core.hooksPath .githooks`; nothing forces that.
+- The Claude hooks only see commands Claude runs, not commands you type. They only read the command line, so the contents of a file passed with `--body-file` are not scanned for attribution.
+- Hook matchers match the tool name only, so the scripts filter the command text themselves. They join backslash-newline continuations and mask quoted strings and heredoc bodies, so text that merely mentions a command is not mistaken for one. They recognise gh behind shell keywords (`then`, `do`, `!`, `{`), env assignments, wrappers (`env`, `sudo`, `timeout`, `nice`, `nohup`), and a path or backslash (`/usr/bin/gh`, `\gh`).
+- Out of scope, and not caught: gh inside `bash -c "..."`, a `$(...)` inside a double-quoted string, and gh aliases.
+- Without `jq` and `python3` the hooks run degraded: they warn on stderr, fail closed for `gh pr merge`, and scan the raw event for attribution.
+- The hooks are written for bash 3.2 and newer (macOS default) and POSIX sh for the git hooks.
+- `.gitattributes` forces LF on `*.sh` and `.githooks/*`; a CRLF hook would break every commit once `core.hooksPath` is set.
 
 ## Install the git hooks
 
@@ -49,6 +58,10 @@ Git does not run hooks from a tracked folder by default. Once per clone:
 ```
 git config core.hooksPath .githooks
 ```
+
+## Reviewing PRs that touch this folder
+
+Hooks, skills and commands in `.claude/` and `.githooks/` run on your machine as soon as you check the branch out and start Claude or commit. Review them before you do. `gh pr diff <n>` takes no path filter, so list the files with `gh pr diff <n> --name-only`, then read just those paths without checking the branch out: `git fetch origin pull/<n>/head && git diff origin/main...FETCH_HEAD -- .claude .githooks`. `.github/CODEOWNERS` asks the owner to review any change under those paths.
 
 ## What stays personal
 

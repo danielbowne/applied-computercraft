@@ -28,12 +28,15 @@ The dependency versions in `gradle.properties` (`neo_version`, `ae2_version`, `c
 
 - Semver in `mod_version` (`gradle.properties`). Stay on 0.x until the Lua API is considered stable.
 - Every release needs a `## X.Y.Z` section in `CHANGELOG.md`.
-- Pushing tag `vX.Y.Z` (it must equal `mod_version`) runs `release.yml`: it builds, publishes a GitHub Release using that changelog section as the notes, and uploads to CurseForge when the `CURSEFORGE_PROJECT_ID` repo variable is set (token in the `CURSEFORGE_TOKEN` secret).
+- Pushing tag `vX.Y.Z` (it must equal `v` + `mod_version`) runs `release.yml`: it builds and publishes a GitHub Release using that changelog section as the notes.
+- CurseForge upload is not in `release.yml` on `main` yet. It is the open PR #2 (`ci/curseforge-publish`). Once that CurseForge step is merged, it uploads when the `CURSEFORGE_PROJECT_ID` repo variable is set (token in the `CURSEFORGE_TOKEN` secret). Until then, a CurseForge file is uploaded by hand.
 - Steps are in `.claude/skills/release/SKILL.md`.
 
 ## Multiple Minecraft versions
 
-One branch per Minecraft version: `main` is 26.1.2, later ones are `mc-26.2` and so on. Fixes land on the oldest supported branch and are carried forward to the newer ones. Jar names already carry the Minecraft version, so releases from different branches do not collide.
+One branch per Minecraft version: `main` is 26.1.2, later ones are `mc-26.2` and so on. Fixes land on the oldest supported branch and are carried forward to the newer ones.
+
+Jar names carry the Minecraft version, but tags and GitHub Release titles come from `mod_version`, so two branches releasing the same number would collide. The rule that avoids it: version branches carry the Minecraft version in `mod_version` as semver build metadata, for example `0.2.0+mc26.2`, tagged `v0.2.0+mc26.2` (and a `## 0.2.0+mc26.2` changelog heading). `main` keeps plain versions (`0.2.0`). When you create a version branch, edit on that branch: `minecraft_version`, `minecraft_version_range`, the dependency floors, `mod_version`, and, once PR #2's CurseForge step exists, its `game-versions` and file name in `release.yml`. Check on the first release from a new branch that the loader accepts a `+` in the mod version.
 
 ## Code rules
 
@@ -54,10 +57,11 @@ These were learned the hard way.
 
 ## Git and PR rules
 
-- Never commit to `main`. Branches are `<type>/<slug>` with a conventional-commit type (`feat/`, `fix/`, `chore/`, `docs/`, `refactor/`).
+- Never commit to `main`. Branches are `<type>/<slug>` where type is one of `feat`, `fix`, `chore`, `docs`, `refactor`, `ci`, `build`, `test`, `release`, `perf`.
 - Commit messages are conventional commits.
 - Squash merges only, with an explicit subject and body.
-- No AI attribution anywhere: commits, PRs, issues, comments, release notes. No `Co-Authored-By` for tools, no session links, no "generated with" lines. Hooks enforce this (see `.claude/README.md`).
+- Branch protection on `main` requires a PR, one approving review, a passing `build` check, and an up-to-date branch; only squash merges are allowed. `gh pr merge --admin` bypasses those checks. It is owner-only and is used only after `build` is green on a branch that is up to date with `main` (merge or rebase `main` in and re-run CI if it is behind).
+- No AI attribution anywhere: commits, PRs, issues, comments, release notes. No `Co-Authored-By` for tools, no session links, no "generated with" lines. Enforcement is partial: the git hooks in `.githooks/` are opt-in (`git config core.hooksPath .githooks`), the Claude hooks only see commands Claude runs, and `pre-commit` refuses `main` only (version branches such as `mc-26.2` are allowed by design). See `.claude/README.md` for what each gate covers.
 - Regular hyphens, never em dashes, in prose.
 - PR bodies follow `.claude/skills/pr-description/SKILL.md`.
 
