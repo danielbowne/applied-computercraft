@@ -39,3 +39,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" build/libs/*.jar --title "Applied ComputerCraft $MOD_VERSION" --notes-file notes.md
+
+      # Uploads the same jar to CurseForge. Needs the CURSEFORGE_TOKEN secret and the
+      # CURSEFORGE_PROJECT_ID repository variable; skipped until the variable is set.
+      - name: Publish to CurseForge
+        if: ${{ vars.CURSEFORGE_PROJECT_ID != '' }}
+        uses: Kir-Antipov/mc-publish@v3.3
+        with:
+          curseforge-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
+          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
+          files: build/libs/*.jar
+          name: Applied ComputerCraft ${{ env.MOD_VERSION }} (26.1.2)
+          version: ${{ env.MOD_VERSION }}
+          version-type: release
+          changelog-file: notes.md
+          loaders: neoforge
+          game-versions: 26.1.2
+          game-version-filter: none
+          java: 25
+          environment: server | client?
+          dependencies: |
+            ae2(required){curseforge:223794}
+            computercraft(required){curseforge:282001}
