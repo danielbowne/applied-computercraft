@@ -1,0 +1,23 @@
+#!/bin/sh
+# Rejects commit messages that carry AI attribution (Co-Authored-By trailers naming an AI tool,
+# session trailers or links, "Generated with <AI tool>" lines). Patterns are shared with the
+# Claude Code hooks in .claude/hooks/_patterns.sh. Enable with:
+#   git config core.hooksPath .githooks
+
+msg_file=$1
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+patterns="$root/.claude/hooks/_patterns.sh"
+
+if [ ! -r "$patterns" ]; then
+    echo "commit-msg: $patterns not found, skipping the attribution check" >&2
+    exit 0
+fi
+# shellcheck source=../.claude/hooks/_patterns.sh
+. "$patterns"
+
+if hit=$(grep -v '^#' "$msg_file" | ai_find_attribution); then
+    echo "commit-msg: AI attribution is not allowed in commit messages." >&2
+    echo "Offending line: $hit" >&2
+    exit 1
+fi
+exit 0
