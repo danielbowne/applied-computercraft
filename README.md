@@ -33,8 +33,10 @@ Most methods take a filter: a string id, or a table with any of these fields.
 | `name = "#c:ingots"` | item or fluid tag |
 | `displayName = "iron"` | case-insensitive substring of the display name |
 | `keyType = "appflux:flux"` | exact AE2 key type id, as reported in the `keyType` field of an entry |
-| `type = "item"` / `"fluid"` / a key type id | same idea as `keyType`, with `"item"` and `"fluid"` as short names. Matches the `type` field of an entry |
+| `type = "item"` / `"fluid"` / a key type id | same idea as `keyType`, with `"item"` and `"fluid"` as short names. `type = "ae2:i"` also matches items, and `"ae2:f"` fluids. Unknown values match nothing |
 | `count = 64` (or `amount`) | how many to move or craft. Defaults to 64 for items and 1000 mB for fluids |
+
+`keyType` and `type` only narrow a search. Methods that move, craft or cancel (and `getItem`, `getFluid`, `isCrafting` and the `isCraftable` family) still need a `name`, a tag or a `displayName`, and `cancelCraftingTasks` needs one of those or `{all = true}`. Only `getResources` and `getResource` accept a `keyType` or `type` on its own.
 
 Data components are not matched. A name matches every variant of that id, and the first one found is used.
 
@@ -52,20 +54,23 @@ Methods that fail return `nil` (or `0` / `false`) plus a status string, such as 
 - `getItem(filter)`, `getFluid(filter)`, `getResource(filter)`: one entry, or the craftable entry with count 0 if none is stored. `getResource` accepts any key type.
 - `getCraftableItems([filter])`, `getCraftableFluids([filter])`
 
-Each entry is a table with `name`, `displayName`, `count`, `amount`, `isCraftable`, `type`, `keyType` and, when the key type has one, `unit`. Items also have `maxStackSize` and `hasComponents`.
+Each entry is a table with `name`, `displayName`, `count`, `amount`, `isCraftable`, `type`, `keyType`, `amountPerUnit` and, when the key type has one, `unit`. Items also have `maxStackSize` and `hasComponents`.
 - `type` is `"item"`, `"fluid"`, or the key type id for anything else.
 - `keyType` is the AE2 key type id, such as `"ae2:i"` (items) or `"ae2:f"` (fluids).
 - `unit` is the key type's unit symbol (`"B"` for fluids). Items have none, so the field is absent.
-- `keyType` and `unit` also appear on `getItems`, `getFluids` and the other methods that return entries.
+- `amountPerUnit` is how many base units make one `unit`: 1000 for fluids, 1 for items.
+- `count` and `amount` are raw base units (mB for fluids). Divide by `amountPerUnit` to get `unit`s, for example buckets.
+- `keyType`, `unit` and `amountPerUnit` also appear on `getItems`, `getFluids` and the other methods that return entries.
+- Lua numbers are doubles, so counts above 2^53 (about 9e15) lose precision.
 
-Reading Applied Flux's FE, which it stores in the network as its own key type (`appflux:flux`, the key itself is `appflux:fe`):
+Reading Applied Flux's FE, which it stores in the network as its own key type. The key type is `appflux:flux` and the key itself is `appflux:fe` (confirmed on a live network):
 
 ```lua
 local fe = me.getResource({keyType = "appflux:flux"})
-print(fe.displayName, fe.count)
+if fe then print(fe.displayName, fe.count) end
 ```
 
-Those ids were read from the Applied Flux 1.0.4 jar. For any other add-on, call `me.getResources()` and look at the `keyType` field of its entries.
+Applied Replicatics' matter shows up the same way, as `keyType` `apprep:m`. For any other add-on, call `me.getResources()` and look at the `keyType` field of its entries.
 
 **Crafting**
 - `isCraftable(filter)`, `isItemCraftable(filter)`, `isFluidCraftable(filter)`
@@ -76,7 +81,9 @@ Those ids were read from the Applied Flux 1.0.4 jar. For any other add-on, call 
   - `STARTED` means the job was handed to a crafting CPU, not that the items are finished. Use `isCrafting` to see when it is done.
   - CC drops events that arrive while a script is waiting on a peripheral call, so a script that fires several `craftItem` calls in a row can miss some `me_crafting` events. To be safe, check with `isCrafting` or `getCraftingTasks`.
   - Each computer can have 8 requests calculating at once by default. Past that the call returns `nil, "TOO_MANY_JOBS"`.
-- `getCraftingCPUs()`, `getCraftingTasks()`. A CPU without a name is reported as `CPU #n`, where n is its 1-based position in the network's CPU list, which matches AE2's crafting screen. The `cpuName` argument of `craftItem` and `craftFluid` takes that same label.
+- `getCraftingCPUs()`, `getCraftingTasks()`. A CPU without a name is reported as `CPU #n`, where n is its 1-based position in the network's CPU list. This is the same format AE2's screen uses, but the position is not stable: it can change after a restart or when a CPU is built, removed or goes inactive. Name your CPUs in AE2 to target one reliably.
+  - The `cpuName` argument of `craftItem` and `craftFluid` takes a CPU's name or that `CPU #n` label. A CPU that is literally named `CPU #3` is preferred over the unnamed CPU in position 3.
+  - `"Unnamed"` is still accepted as `cpuName` and means the first unnamed CPU. It is deprecated and no longer reported anywhere.
 - `cancelCraftingTasks(filter)`: cancels running jobs for that resource, and this computer's requests that are still calculating. A filter is required. Pass `{all = true}` to cancel every job on the network.
 
 **Energy**
@@ -96,6 +103,8 @@ The Lua API is modelled on Advanced Peripherals' ME Bridge, and method names and
 
 - The crafting event is `me_crafting` (AP uses `ae_crafting`). `craftItem` returns a number, not a job object.
 - `getResources` and `getResource` have no Advanced Peripherals counterpart.
+- Unnamed crafting CPUs are reported as `CPU #n` here, where AP reports `Unnamed`.
+- AP filters accept `type = "chemical"` and error on unknown types. Here `type` is `"item"`, `"fluid"` or a key type id (for example the id of a chemical add-on's key type), and unknown values just match nothing.
 - There are no `fingerprint` or `components` filters, and entries have no `tags`, `fingerprint` or `components` fields.
 - Not implemented:
   - the storage capacity methods (`getTotalItemStorage` and friends)

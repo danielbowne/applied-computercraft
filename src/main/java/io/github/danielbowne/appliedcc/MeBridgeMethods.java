@@ -105,7 +105,7 @@ public final class MeBridgeMethods implements GenericPeripheral {
 
     @LuaFunction(mainThread = true)
     public MethodResult getResource(IInWorldGridNodeHost host, IArguments args) throws LuaException {
-        return one(host, Filter.req(args, 0, DEFAULT_ITEM_COUNT), AEKey.class);
+        return one(host, Filter.reqResource(args, 0, DEFAULT_ITEM_COUNT), AEKey.class);
     }
 
     @LuaFunction(mainThread = true)
@@ -185,13 +185,7 @@ public final class MeBridgeMethods implements GenericPeripheral {
         ICraftingCPU cpu = null;
         String cpuName = args.optString(1, "");
         if (!cpuName.isEmpty()) {
-            int n = 0;
-            for (ICraftingCPU c : cs.getCpus()) {
-                if (cpuName.equals(cpuLabel(c, ++n))) {
-                    cpu = c;
-                    break;
-                }
-            }
+            cpu = findCpu(cs, cpuName);
             if (cpu == null) return MethodResult.of(null, "CPU_NOT_FOUND");
         }
 
@@ -559,6 +553,24 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return cpu.getName() != null ? cpu.getName().getString() : "CPU #" + position;
     }
 
+    /**
+     * Finds a CPU by the name it was given in AE2, else by the "CPU #n" label of an unnamed CPU
+     * (n = 1-based position in getCpus()), else, for 0.1.0 compatibility, "Unnamed" for the first
+     * unnamed CPU. A CPU literally named "CPU #3" wins over the unnamed CPU in position 3.
+     */
+    private static ICraftingCPU findCpu(ICraftingService cs, String wanted) {
+        for (ICraftingCPU c : cs.getCpus()) {
+            if (c.getName() != null && wanted.equals(c.getName().getString())) return c;
+        }
+        int n = 0;
+        for (ICraftingCPU c : cs.getCpus()) {
+            n++;
+            if (c.getName() != null) continue;
+            if (wanted.equals(cpuLabel(c, n)) || wanted.equals("Unnamed")) return c;
+        }
+        return null;
+    }
+
     private static Map<String, Object> cpuInfo(ICraftingCPU cpu, int position) {
         Map<String, Object> m = new HashMap<>();
         m.put("name", cpuLabel(cpu, position));
@@ -581,6 +593,7 @@ public final class MeBridgeMethods implements GenericPeripheral {
         m.put("keyType", keyType);
         String unit = key.getUnitSymbol();
         if (unit != null) m.put("unit", unit);
+        m.put("amountPerUnit", key.getAmountPerUnit());
         if (key instanceof AEItemKey ik) {
             m.put("maxStackSize", ik.getMaxStackSize());
             m.put("hasComponents", ik.hasComponents());
@@ -605,6 +618,8 @@ public final class MeBridgeMethods implements GenericPeripheral {
      *   displayName = "iron"            case-insensitive substring
      *   keyType = "appflux:flux"        exact AE2 key type id (see the keyType field of getResources)
      *   type = "item" | "fluid" | an AE2 key type id   same idea, with the short names for items and fluids
+     * keyType and type only narrow a search. Methods that move, craft or cancel need a name, tag or
+     * displayName as well; only getResources and getResource accept a keyType or type on its own.
      *   count / amount = 64             how many to move or craft
      * Components are not matched: a name matches every variant of that id.
      */
@@ -636,14 +651,25 @@ public final class MeBridgeMethods implements GenericPeripheral {
 
         static Filter req(IArguments args, int i, long defCount) throws LuaException {
             Filter f = opt(args, i, defCount);
-            if (f.isEmpty()) throw new LuaException("filter needs a name, e.g. {name=\"minecraft:iron_ingot\"}");
+            if (f.isEmpty()) {
+                throw new LuaException("filter needs a name, tag or displayName, e.g. {name=\"minecraft:iron_ingot\"}");
+            }
+            return f;
+        }
+
+        /** getResource: like req, but a keyType or type alone is enough (it returns the first match). */
+        static Filter reqResource(IArguments args, int i, long defCount) throws LuaException {
+            Filter f = opt(args, i, defCount);
+            if (f.isEmpty() && f.keyType == null && f.type == null) {
+                throw new LuaException("filter needs a name, tag, displayName, keyType or type, e.g. {keyType=\"appflux:flux\"}");
+            }
             return f;
         }
 
         /** Cancel needs a real filter or an explicit {all=true}, so a nil argument can't wipe every job. */
         static Filter cancel(IArguments args, int i) throws LuaException {
             Filter f = opt(args, i, 1);
-            if (f.isEmpty() && !f.all) throw new LuaException("pass a filter, or {all=true} to cancel every job on the network");
+            if (f.isEmpty() && !f.all) throw new LuaException("pass a filter with a name, tag or displayName, or {all=true} to cancel every job on the network");
             return f;
         }
 
@@ -664,7 +690,7 @@ public final class MeBridgeMethods implements GenericPeripheral {
         }
 
         boolean isEmpty() {
-            return name == null && tag == null && displayName == null && keyType == null && type == null;
+            return name == null && tag == null && displayName == null;
         }
 
         private boolean matchesType(AEKey k) {
