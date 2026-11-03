@@ -1,0 +1,43 @@
+modLoader = "javafml"
+loaderVersion = "[11,)"
+license = "${mod_license}"
+issueTrackerURL = "https://github.com/danielbowne/applied-computercraft/issues"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+logoFile = "logo.png"
+authors = "${mod_authors}"
+displayURL = "https://github.com/danielbowne/applied-computercraft"
+description = '''
+Lets CC:Tweaked computers read and control an AE2 network. Adds an "me_bridge" peripheral to every AE2 block that hosts a grid node. Only needed on the server (or in singleplayer); players do not need it to join.
+'''
+
+[[dependencies.${mod_id}]]
+modId = "neoforge"
+type = "required"
+versionRange = "[${neo_version},)"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "minecraft"
+type = "required"
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "ae2"
+type = "required"
+versionRange = "[${ae2_version},)"
+ordering = "AFTER"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "computercraft"
+type = "required"
+versionRange = "[${cc_version},)"
+ordering = "AFTER"
+side = "BOTH"
