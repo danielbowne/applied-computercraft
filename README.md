@@ -64,7 +64,7 @@ Each entry is a table with `name`, `displayName`, `count`, `amount`, `isCraftabl
 - `cancelCraftingTasks(filter)`: cancels running jobs for that resource, and this computer's requests that are still calculating. A filter is required. Pass `{all = true}` to cancel every job on the network.
 
 **Energy**
-- `getStoredEnergy()`, `getEnergyCapacity()`, `getEnergyUsage()`, `getAverageEnergyInput()`, `getEnergyInfo()`
+- `getStoredEnergy()`, `getEnergyCapacity()`, `getEnergyUsage()`, `getAverageEnergyInput()`, `getEnergyInfo()`. These also work when the network is out of power.
 
 **Moving items and fluids**
 - `exportItem(filter, target)`, `exportFluid(filter, target)`, `importItem(filter, target)`, `importFluid(filter, target)` return the amount moved.
@@ -72,6 +72,7 @@ Each entry is a table with `name`, `displayName`, `count`, `amount`, `isCraftabl
   - a direction from the AE block: `"up"` or `"top"`, `"down"` or `"bottom"`, `"north"`, `"south"`, `"east"`, `"west"`
   - the name of a peripheral the computer can see, such as `"left"` or `"minecraft:chest_0"`
 - For import, `{}` means anything.
+- If a storage bus on the same network watches the target inventory, the items just go around in a loop. The amount returned counts them anyway, even though nothing really moved.
 
 ## Coming from Advanced Peripherals
 

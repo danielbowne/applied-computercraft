@@ -76,7 +76,8 @@ public final class MeBridgeMethods implements GenericPeripheral {
     }
 
     @LuaFunction(mainThread = true)
-    public boolean isOnline(IInWorldGridNodeHost host) {
+    public boolean isOnline(IInWorldGridNodeHost host) throws LuaException {
+        checkAllowed(host);
         IGridNode node = node(host);
         return node != null && node.isOnline();
     }
@@ -248,31 +249,31 @@ public final class MeBridgeMethods implements GenericPeripheral {
 
     @LuaFunction(mainThread = true)
     public MethodResult getStoredEnergy(IInWorldGridNodeHost host) throws LuaException {
-        IGrid g = grid(host);
+        IGrid g = grid(host, false);
         return g == null ? notConnected(0) : MethodResult.of(g.getEnergyService().getStoredPower());
     }
 
     @LuaFunction(mainThread = true)
     public MethodResult getEnergyCapacity(IInWorldGridNodeHost host) throws LuaException {
-        IGrid g = grid(host);
+        IGrid g = grid(host, false);
         return g == null ? notConnected(0) : MethodResult.of(g.getEnergyService().getMaxStoredPower());
     }
 
     @LuaFunction(mainThread = true)
     public MethodResult getEnergyUsage(IInWorldGridNodeHost host) throws LuaException {
-        IGrid g = grid(host);
+        IGrid g = grid(host, false);
         return g == null ? notConnected(0) : MethodResult.of(g.getEnergyService().getAvgPowerUsage());
     }
 
     @LuaFunction(mainThread = true)
     public MethodResult getAverageEnergyInput(IInWorldGridNodeHost host) throws LuaException {
-        IGrid g = grid(host);
+        IGrid g = grid(host, false);
         return g == null ? notConnected(0) : MethodResult.of(g.getEnergyService().getAvgPowerInjection());
     }
 
     @LuaFunction(mainThread = true)
     public MethodResult getEnergyInfo(IInWorldGridNodeHost host) throws LuaException {
-        IGrid g = grid(host);
+        IGrid g = grid(host, false);
         if (g == null) return notConnected(null);
         IEnergyService e = g.getEnergyService();
         Map<String, Object> m = new HashMap<>();
@@ -398,16 +399,23 @@ public final class MeBridgeMethods implements GenericPeripheral {
             }
             if (extracted <= 0) continue;
 
-            long stored = storage.insert(key, extracted, Actionable.MODULATE, src);
-            long left = extracted - stored;
-            if (left > 0) {
-                int back;
-                try (Transaction tx = Transaction.openRoot()) {
-                    back = handler.insert(slot, res, (int) left, tx);
-                    if (back < left) back += handler.insert(res, (int) (left - back), tx);
-                    tx.commit();
+            long stored = 0;
+            try {
+                stored = storage.insert(key, extracted, Actionable.MODULATE, src);
+            } finally {
+                // whatever ME did not take (including everything, if the insert threw) goes back to the source
+                long left = extracted - stored;
+                if (left > 0) {
+                    int back = 0;
+                    try (Transaction tx = Transaction.openRoot()) {
+                        back = handler.insert(slot, res, (int) left, tx);
+                        if (back < left) back += handler.insert(res, (int) (left - back), tx);
+                        tx.commit();
+                    } catch (RuntimeException e) {
+                        LOG.warn("importItem: returning {} x {} to the source inventory failed", left, key.getId(), e);
+                    }
+                    if (back < left) LOG.warn("importItem: {} x {} could not be returned to the source inventory and was lost", left - back, key.getId());
                 }
-                if (back < left) LOG.warn("importItem: {} x {} could not be returned to the source inventory and was lost", left - back, key.getId());
             }
             moved += stored;
             remaining -= stored;
@@ -456,16 +464,25 @@ public final class MeBridgeMethods implements GenericPeripheral {
 
     /** The grid if the bridge may use it right now; null if not connected. Throws when the server disabled it. */
     private static IGrid grid(IInWorldGridNodeHost host) throws LuaException {
-        if (!Config.ENABLED.get()) throw new LuaException("Applied ComputerCraft is disabled on this server");
-        if (host instanceof IPartHost && !Config.ALLOW_ON_CABLES.get()) {
-            throw new LuaException("The ME bridge only works on full AE2 blocks on this server, not cables");
-        }
+        return grid(host, true);
+    }
+
+    /** requireActive=false is for read-only energy readouts, which matter most when the network is unpowered. */
+    private static IGrid grid(IInWorldGridNodeHost host, boolean requireActive) throws LuaException {
+        checkAllowed(host);
         IGridNode n = node(host);
-        if (n == null || !n.hasGridBooted() || !n.isActive()) return null;
+        if (n == null || !n.hasGridBooted() || (requireActive && !n.isActive())) return null;
         try {
             return n.getGrid();
         } catch (IllegalStateException destroyed) {
             return null;
+        }
+    }
+
+    private static void checkAllowed(IInWorldGridNodeHost host) throws LuaException {
+        if (!Config.ENABLED.get()) throw new LuaException("Applied ComputerCraft is disabled on this server");
+        if (host instanceof IPartHost && !Config.ALLOW_ON_CABLES.get()) {
+            throw new LuaException("The ME bridge only works on full AE2 blocks on this server, not cables");
         }
     }
 
@@ -577,7 +594,7 @@ public final class MeBridgeMethods implements GenericPeripheral {
 
         private Filter(String name, String displayName, boolean all, long count) throws LuaException {
             if (name != null && name.startsWith("#")) {
-                Identifier id = Identifier.tryParse(name.substring(1));
+                Identifier id = name.length() > 1 ? Identifier.tryParse(name.substring(1)) : null;
                 if (id == null) throw new LuaException("bad tag: " + name);
                 this.tag = id;
                 this.name = null;
