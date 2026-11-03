@@ -1,0 +1,15 @@
+---
+description: Walk the current branch through review, push, PR, CI, and (with the owner's yes) squash merge and cleanup
+---
+
+Walk the current branch through the `ship-flow` skill (`.claude/skills/ship-flow/SKILL.md`). Stop and report at the first failing step.
+
+1. **Preconditions.** Get the branch with `git branch --show-current`. Refuse if it is `main`. Refuse if `git status --short` shows uncommitted changes (tell the owner to commit or stash first). Work out `<base>`: the PR's `baseRefName` if a PR exists (`gh pr list --head <branch> --json number,baseRefName`), otherwise `main`; if the branch was cut from a version branch such as `mc-26.2`, ask the owner.
+2. **Pre-push review.** Run `git fetch origin <base>`, then the `pre-push-review` skill on `origin/<base>...HEAD`. Skip it only if it already ran on this exact diff in this session (same HEAD) or the owner waived it for this push. Fix findings by default, ask only about product decisions or findings you believe are wrong, and commit the fixes.
+3. **Push.** `git push -u origin <branch>`, then verify with `git ls-remote --heads origin <branch>` that the remote head matches `git rev-parse HEAD`.
+4. **PR.** Look for an existing one with `gh pr list --head <branch> --json number,url,state`. If none, create it with `gh pr create --base <base>`: title is the conventional-commit subject, under 70 characters; body written per the `pr-description` skill and passed with `--body-file`. If one exists, update its body if the change warrants it.
+5. **CI and freshness.** Wait with `gh pr checks <n> --watch`. Stop if any check is red (show the failing log excerpt). Also stop if the branch is behind `<base>`: `mergeStateStatus` reads BLOCKED here for every PR, so use `gh api repos/{owner}/{repo}/compare/<base>...<branch> --jq .behind_by` (0 means up to date) or `git merge-base --is-ancestor origin/<base> origin/<branch>`. If behind, update the branch (`gh pr update-branch <n>`, or merge or rebase `<base>` in and push) and wait for `build` again. Also stop on unresolved review conversations. Do not offer to merge on a red or stale check.
+6. **Ask the owner** with AskUserQuestion: merge now, or leave the PR open. Do not merge without a yes.
+7. **On yes, merge:** `gh pr merge <n> --squash --admin --subject "<subject> (#<n>)" --body-file <file>`. The body file is a short written summary of the change (the PR body is fine if it reads as a commit body). `--admin` is owner-only and is used only because `build` is green on an up-to-date branch with conversations resolved.
+8. **Clean up.** Confirm `gh pr view <n> --json state,headRefOid` shows `MERGED` and that `git rev-parse <branch>` equals `headRefOid`; otherwise stop. Then, in this order: remove any worktree for the branch (`git worktree remove .claude/worktrees/<slug>`), `git fetch origin --prune`, switch off the branch (`git switch <base>` for reading only), and `git branch -D <branch>` (squash merges look unmerged). If it was a release PR, point the owner at the `release` skill for tagging.
+9. **Report:** branch, PR number and URL, review outcome, CI result, merge state, and what was cleaned up.

@@ -38,3 +38,24 @@ run/
 **/src/generated/**/.cache/
 repo/
 !**/src/**/repo/
+
+### Claude Code ###
+# Share the project setup, ignore everything else in .claude/
+!.claude/
+.claude/*
+!.claude/settings.json
+!.claude/README.md
+!.claude/agents/
+!.claude/skills/
+!.claude/commands/
+!.claude/hooks/
+!.claude/workflows/
+**/.claude/settings.local.json
+.claude/worktrees/
+# a global ignore rule may hide the root rules file
+!CLAUDE.md
+# personal and local files never get committed, even inside the re-included folders
+CLAUDE.local.md
+.claude/**/*.local.*
+.claude/**/.env*
+.claude/**/*.log

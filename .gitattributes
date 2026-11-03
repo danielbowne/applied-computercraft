@@ -5,3 +5,7 @@ src/generated/**/.cache/* text eol=lf
 src/generated/**/*.json text eol=lf
 gradlew text eol=lf
 *.bat text eol=crlf
+
+# Shell scripts and git hooks must keep LF endings on every checkout (a CRLF hook breaks every commit)
+*.sh text eol=lf
+.githooks/* text eol=lf
