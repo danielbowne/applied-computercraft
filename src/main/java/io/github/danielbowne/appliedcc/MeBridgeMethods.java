@@ -96,6 +96,18 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return list(host, k -> k instanceof AEFluidKey && f.matches(k));
     }
 
+    /** Every stored key of every AE2 key type (items, fluids, and whatever add-ons register, such as FE). */
+    @LuaFunction(value = {"getResources", "listResources"}, mainThread = true)
+    public MethodResult getResources(IInWorldGridNodeHost host, IArguments args) throws LuaException {
+        Filter f = Filter.opt(args, 0, DEFAULT_ITEM_COUNT);
+        return list(host, f::matches);
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getResource(IInWorldGridNodeHost host, IArguments args) throws LuaException {
+        return one(host, Filter.reqResource(args, 0, DEFAULT_ITEM_COUNT), AEKey.class);
+    }
+
     @LuaFunction(mainThread = true)
     public MethodResult getItem(IInWorldGridNodeHost host, IArguments args) throws LuaException {
         return one(host, Filter.req(args, 0, DEFAULT_ITEM_COUNT), AEItemKey.class);
@@ -173,12 +185,7 @@ public final class MeBridgeMethods implements GenericPeripheral {
         ICraftingCPU cpu = null;
         String cpuName = args.optString(1, "");
         if (!cpuName.isEmpty()) {
-            for (ICraftingCPU c : cs.getCpus()) {
-                if (cpuName.equals(cpuName(c))) {
-                    cpu = c;
-                    break;
-                }
-            }
+            cpu = findCpu(cs, cpuName);
             if (cpu == null) return MethodResult.of(null, "CPU_NOT_FOUND");
         }
 
@@ -198,8 +205,9 @@ public final class MeBridgeMethods implements GenericPeripheral {
         if (grid == null) return notConnected(null);
         ICraftingService cs = grid.getCraftingService();
         List<Object> out = new ArrayList<>();
+        int n = 0;
         for (ICraftingCPU cpu : cs.getCpus()) {
-            Map<String, Object> m = cpuInfo(cpu);
+            Map<String, Object> m = cpuInfo(cpu, ++n);
             CraftingJobStatus st = cpu.getJobStatus();
             if (st != null) m.put("craftingJob", job(st, cs));
             out.add(m);
@@ -213,11 +221,13 @@ public final class MeBridgeMethods implements GenericPeripheral {
         if (grid == null) return notConnected(null);
         ICraftingService cs = grid.getCraftingService();
         List<Object> out = new ArrayList<>();
+        int n = 0;
         for (ICraftingCPU cpu : cs.getCpus()) {
+            n++;
             CraftingJobStatus st = cpu.getJobStatus();
             if (st == null) continue;
             Map<String, Object> m = job(st, cs);
-            m.put("cpu", cpuInfo(cpu));
+            m.put("cpu", cpuInfo(cpu, n));
             out.add(m);
         }
         return MethodResult.of(out);
@@ -538,13 +548,32 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return null;
     }
 
-    private static String cpuName(ICraftingCPU cpu) {
-        return cpu.getName() != null ? cpu.getName().getString() : "Unnamed";
+    /** The CPU's own name, or "CPU #n" (n = 1-based position in getCpus()) when unnamed, like AE2's screen. */
+    private static String cpuLabel(ICraftingCPU cpu, int position) {
+        return cpu.getName() != null ? cpu.getName().getString() : "CPU #" + position;
     }
 
-    private static Map<String, Object> cpuInfo(ICraftingCPU cpu) {
+    /**
+     * Finds a CPU by the name it was given in AE2, else by the "CPU #n" label of an unnamed CPU
+     * (n = 1-based position in getCpus()), else, for 0.1.0 compatibility, "Unnamed" for the first
+     * unnamed CPU. A CPU literally named "CPU #3" wins over the unnamed CPU in position 3.
+     */
+    private static ICraftingCPU findCpu(ICraftingService cs, String wanted) {
+        for (ICraftingCPU c : cs.getCpus()) {
+            if (c.getName() != null && wanted.equals(c.getName().getString())) return c;
+        }
+        int n = 0;
+        for (ICraftingCPU c : cs.getCpus()) {
+            n++;
+            if (c.getName() != null) continue;
+            if (wanted.equals(cpuLabel(c, n)) || wanted.equals("Unnamed")) return c;
+        }
+        return null;
+    }
+
+    private static Map<String, Object> cpuInfo(ICraftingCPU cpu, int position) {
         Map<String, Object> m = new HashMap<>();
-        m.put("name", cpuName(cpu));
+        m.put("name", cpuLabel(cpu, position));
         m.put("storage", cpu.getAvailableStorage());
         m.put("coProcessors", cpu.getCoProcessors());
         m.put("isBusy", cpu.isBusy());
@@ -559,7 +588,12 @@ public final class MeBridgeMethods implements GenericPeripheral {
         m.put("count", amount);
         m.put("amount", amount);
         m.put("isCraftable", cs != null && cs.isCraftable(key));
-        m.put("type", key instanceof AEFluidKey ? "fluid" : key instanceof AEItemKey ? "item" : key.getType().toString());
+        String keyType = key.getType().getId().toString();
+        m.put("type", key instanceof AEFluidKey ? "fluid" : key instanceof AEItemKey ? "item" : keyType);
+        m.put("keyType", keyType);
+        String unit = key.getUnitSymbol();
+        if (unit != null) m.put("unit", unit);
+        m.put("amountPerUnit", key.getAmountPerUnit());
         if (key instanceof AEItemKey ik) {
             m.put("maxStackSize", ik.getMaxStackSize());
             m.put("hasComponents", ik.hasComponents());
@@ -582,6 +616,10 @@ public final class MeBridgeMethods implements GenericPeripheral {
      *   name = "minecraft:iron_ingot"   exact id
      *   name = "#c:ingots"              tag (item or fluid tag, by key type)
      *   displayName = "iron"            case-insensitive substring
+     *   keyType = "appflux:flux"        exact AE2 key type id (see the keyType field of getResources)
+     *   type = "item" | "fluid" | an AE2 key type id   same idea, with the short names for items and fluids
+     * keyType and type only narrow a search. Methods that move, craft or cancel need a name, tag or
+     * displayName as well; only getResources and getResource accept a keyType or type on its own.
      *   count / amount = 64             how many to move or craft
      * Components are not matched: a name matches every variant of that id.
      */
@@ -589,10 +627,12 @@ public final class MeBridgeMethods implements GenericPeripheral {
         final String name;
         final Identifier tag;
         final String displayName;
+        final String keyType;
+        final String type;
         final boolean all;
         final long count;
 
-        private Filter(String name, String displayName, boolean all, long count) throws LuaException {
+        private Filter(String name, String displayName, String keyType, String type, boolean all, long count) throws LuaException {
             if (name != null && name.startsWith("#")) {
                 Identifier id = name.length() > 1 ? Identifier.tryParse(name.substring(1)) : null;
                 if (id == null) throw new LuaException("bad tag: " + name);
@@ -603,43 +643,68 @@ public final class MeBridgeMethods implements GenericPeripheral {
                 this.name = name;
             }
             this.displayName = displayName;
+            this.keyType = keyType;
+            this.type = type;
             this.all = all;
             this.count = count;
         }
 
         static Filter req(IArguments args, int i, long defCount) throws LuaException {
             Filter f = opt(args, i, defCount);
-            if (f.isEmpty()) throw new LuaException("filter needs a name, e.g. {name=\"minecraft:iron_ingot\"}");
+            if (f.isEmpty()) {
+                throw new LuaException("filter needs a name, tag or displayName, e.g. {name=\"minecraft:iron_ingot\"}");
+            }
+            return f;
+        }
+
+        /** getResource: like req, but a keyType or type alone is enough (it returns the first match). */
+        static Filter reqResource(IArguments args, int i, long defCount) throws LuaException {
+            Filter f = opt(args, i, defCount);
+            if (f.isEmpty() && f.keyType == null && f.type == null) {
+                throw new LuaException("filter needs a name, tag, displayName, keyType or type, e.g. {keyType=\"appflux:flux\"}");
+            }
             return f;
         }
 
         /** Cancel needs a real filter or an explicit {all=true}, so a nil argument can't wipe every job. */
         static Filter cancel(IArguments args, int i) throws LuaException {
             Filter f = opt(args, i, 1);
-            if (f.isEmpty() && !f.all) throw new LuaException("pass a filter, or {all=true} to cancel every job on the network");
+            if (f.isEmpty() && !f.all) throw new LuaException("pass a filter with a name, tag or displayName, or {all=true} to cancel every job on the network");
             return f;
         }
 
         static Filter opt(IArguments args, int i, long defCount) throws LuaException {
-            if (args.count() <= i || args.get(i) == null) return new Filter(null, null, false, defCount);
+            if (args.count() <= i || args.get(i) == null) return new Filter(null, null, null, null, false, defCount);
             Object raw = args.get(i);
-            if (raw instanceof String s) return new Filter(s, null, false, defCount);
+            if (raw instanceof String s) return new Filter(s, null, null, null, false, defCount);
             Map<?, ?> t = args.getTable(i);
             String name = t.get("name") instanceof String s ? s : null;
             String dn = t.get("displayName") instanceof String s ? s.toLowerCase(Locale.ROOT) : null;
+            String keyType = t.get("keyType") instanceof String s ? s : null;
+            String type = t.get("type") instanceof String s ? s : null;
             boolean all = Boolean.TRUE.equals(t.get("all"));
             long count = t.get("count") instanceof Number n ? n.longValue()
                     : t.get("amount") instanceof Number n2 ? n2.longValue() : defCount;
             if (count < 1) throw new LuaException("count must be >= 1");
-            return new Filter(name, dn, all, count);
+            return new Filter(name, dn, keyType, type, all, count);
         }
 
         boolean isEmpty() {
             return name == null && tag == null && displayName == null;
         }
 
+        private boolean matchesType(AEKey k) {
+            return switch (type) {
+                case "item" -> k instanceof AEItemKey;
+                case "fluid" -> k instanceof AEFluidKey;
+                default -> type.equals(k.getType().getId().toString());
+            };
+        }
+
         boolean matches(AEKey k) {
             if (name != null && !name.equals(k.getId().toString())) return false;
+            if (keyType != null && !keyType.equals(k.getType().getId().toString())) return false;
+            if (type != null && !matchesType(k)) return false;
             if (tag != null) {
                 boolean tagged = k instanceof AEItemKey ? k.isTagged(TagKey.create(Registries.ITEM, tag))
                         : k instanceof AEFluidKey && k.isTagged(TagKey.create(Registries.FLUID, tag));
