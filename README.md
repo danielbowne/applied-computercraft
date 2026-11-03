@@ -105,7 +105,7 @@ AE2 has no access control of its own. Anyone who can place a computer next to a 
 
 `./gradlew build` with JDK 25. The jar ends up in `build/libs/`.
 
-Pushing a tag such as `v0.1.0` that matches `mod_version` in `gradle.properties` builds the jar. It then publishes a GitHub Release, using that version's section of `CHANGELOG.md` as the notes.
+Pushing a tag such as `v0.1.0` that matches `mod_version` in `gradle.properties` builds the jar. It then publishes a GitHub Release, using that version's section of `CHANGELOG.md` as the notes. When the `CURSEFORGE_PROJECT_ID` repository variable is set, a second job uploads the same jar to CurseForge with the `CURSEFORGE_TOKEN` secret (it fails if the secret is empty). If only that job fails, re-run it from the Actions page; the GitHub Release is not touched.
 
 ## License
 
