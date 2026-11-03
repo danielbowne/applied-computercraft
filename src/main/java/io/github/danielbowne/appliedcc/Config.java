@@ -3,7 +3,7 @@ package io.github.danielbowne.appliedcc;
 import dan200.computercraft.api.lua.LuaException;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
-/** Server config, per world: serverconfig/appliedcc-server.toml */
+/** Server config: config/appliedcc-server.toml in the server (or singleplayer instance) folder. */
 final class Config {
     static final ModConfigSpec SPEC;
     static final ModConfigSpec.BooleanValue ENABLED;

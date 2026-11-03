@@ -28,13 +28,20 @@ final class CraftJobs {
                            ICraftingCPU cpu, IComputerAccess computer, AEKey key, long amount) {}
 
     private static final List<Pending> PENDING = new ArrayList<>();
+    /** Events raised during a Lua call; fired next tick, since CC drops events queued while the caller waits. */
+    private static final List<Pending> CANCELLED = new ArrayList<>();
     private static int nextId = 1;
 
     private CraftJobs() {}
 
+    /** Same computer = same computer id; CC gives each peripheral attachment its own IComputerAccess. */
+    private static boolean sameComputer(Pending p, IComputerAccess computer) {
+        return p.computer() == computer || p.computer().getID() == computer.getID();
+    }
+
     static int pendingFor(IComputerAccess computer) {
         int n = 0;
-        for (Pending p : PENDING) if (p.computer() == computer) n++;
+        for (Pending p : PENDING) if (sameComputer(p, computer)) n++;
         return n;
     }
 
@@ -51,16 +58,20 @@ final class CraftJobs {
         Iterator<Pending> it = PENDING.iterator();
         while (it.hasNext()) {
             Pending p = it.next();
-            if (p.computer() != computer || !match.test(p.key())) continue;
+            if (!sameComputer(p, computer) || !match.test(p.key())) continue;
             it.remove();
             p.future().cancel(true);
-            fire(p, false, "CANCELLED");
+            CANCELLED.add(p);
             n++;
         }
         return n;
     }
 
     static void tick() {
+        if (!CANCELLED.isEmpty()) {
+            CANCELLED.forEach(p -> fire(p, false, "CANCELLED"));
+            CANCELLED.clear();
+        }
         if (PENDING.isEmpty()) return;
         Iterator<Pending> it = PENDING.iterator();
         while (it.hasNext()) {
@@ -99,6 +110,7 @@ final class CraftJobs {
     static void clear() {
         PENDING.forEach(p -> p.future().cancel(true));
         PENDING.clear();
+        CANCELLED.clear();
     }
 
     private static void fire(Pending p, boolean ok, String message) {
