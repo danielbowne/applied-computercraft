@@ -21,13 +21,17 @@ Each lane returns only: claim, evidence, caveat, source link, `file:line`, confi
 
 ### Tooling-only diffs
 
-When the diff touches no `src/` (hooks, `.claude/`, `.githooks/`, workflows, docs), the default lanes aim at the wrong thing. Pass custom lanes through `args.lanes` instead, for example:
+When the diff touches no `src/` (hooks, `.claude/`, `.githooks/`, workflows, docs), the default lanes aim at the wrong thing. Pass custom lanes through `args.lanes` as `{ name, focus }` objects (a bare name that is not one of the five defaults is skipped, and a skipped lane makes the run incomplete):
 
-- `hooks-shell-correctness`: parsing of the command line (quotes, heredocs, continuations), exit codes, fail-open versus fail-closed, bash 3.2 and POSIX sh compatibility.
-- `config-security`: what runs on a contributor's machine, permission and hook settings, ignore rules, secrets and personal paths.
-- `docs-accuracy`: docs and skills match what the scripts and workflows really do.
-- `workflow-script`: the Workflow script's API use, validation and result shape.
-- `git-portability`: line endings, file modes, `core.hooksPath`, behaviour with `git commit -v` and worktrees.
+```
+Workflow({ name: "pre-push-review", args: { base: "main", lanes: [
+  { name: "hooks-shell-correctness", focus: "Parsing of the command line (quotes, heredocs, comments, continuations), exit codes, fail-open versus fail-closed, bash 3.2 and POSIX sh compatibility." },
+  { name: "config-security", focus: "What runs on a contributor's machine, permission and hook settings, ignore rules, CODEOWNERS, secrets and personal paths." },
+  { name: "docs-accuracy", focus: "Docs, skills and commands match what the scripts and workflows really do." },
+  { name: "workflow-script", focus: "The Workflow script's API use, validation, verdict values and result shape." },
+  { name: "git-portability", focus: "Line endings, file modes, core.hooksPath, behaviour with git commit -v, worktrees and older git versions." }
+] } })
+```
 
 ## Merge
 
@@ -35,7 +39,7 @@ When the diff touches no `src/` (hooks, `.claude/`, `.githooks/`, workflows, doc
 - Flag conflicts between lanes. Do not hide disagreement or weak evidence.
 - Rank the five findings that most change the answer.
 - Keep low-confidence findings, labeled as such, instead of dropping them.
-- A partial run (a lane did not answer) is reported as incomplete, never as clean.
+- A partial run (a lane did not answer, or a requested lane was skipped as unknown, invalid or duplicate) is reported as `incomplete`, never as clean. The result's `verdict` is always one of `clean`, `fix then push`, `do not push`, `incomplete`; `verdict_detail` says why.
 
 ## Act on the result
 

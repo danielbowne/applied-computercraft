@@ -1,3 +1,7 @@
-# Changes to the Claude setup and git hooks run on a maintainer machine, so they need the owner to review them.
+# Changes to the Claude setup, git hooks, workflows and project rules run on or steer a maintainer
+# machine, so they need the owner to review them.
 /.claude/ @danielbowne
 /.githooks/ @danielbowne
+/.github/ @danielbowne
+/.gitattributes @danielbowne
+/CLAUDE.md @danielbowne

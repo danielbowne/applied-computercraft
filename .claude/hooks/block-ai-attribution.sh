@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse hook (matcher: Bash). Blocks gh commands that write to GitHub (PR, issue, release,
-# gist and repo-description writes, and gh api writes) when the command text contains AI
+# gist, repo, label and project writes, and gh api writes) when the command text contains AI
 # attribution: a Co-Authored-By trailer naming an AI tool, a Claude-Session: line, a
 # claude.ai/code/session link, a "Generated/Written/Created with <AI tool>" line, or a vendor
 # noreply address. Patterns live in _patterns.sh (shared with .githooks/commit-msg).
@@ -9,7 +9,7 @@
 # usually are). What is NOT scanned: the contents of a file passed with --body-file / -F, because
 # the hook only sees the command line. Read-only gh commands are never blocked; `gh api graphql`
 # counts as a write only when the query contains a mutation.
-# Known limits: gh behind bash -c "...", a $(...) inside double quotes, and gh aliases.
+# Known limits: gh inside bash -c "..." or eval "...", backtick substitution inside double quotes, variables that expand to gh, and gh aliases.
 # Runs on bash 3.2 and newer.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
@@ -20,7 +20,8 @@ read_event
 is_gh_write() {
     local args=$1 tok prev="" m method="" has_field=0 method_uc
     local padded=" $args "
-    local re_sub='[[:space:]](pr[[:space:]]+(create|edit|comment|review|merge|close|reopen)|issue[[:space:]]+(create|edit|comment|close|reopen)|release[[:space:]]+(create|edit)|gist[[:space:]]+(create|edit)|repo[[:space:]]+edit)[[:space:]]'
+    local rf=$GH_REPOFLAG
+    local re_sub='[[:space:]](pr'"$rf"'[[:space:]]+(create|edit|comment|review|merge|close|reopen)|issue'"$rf"'[[:space:]]+(create|edit|comment|close|reopen)|release'"$rf"'[[:space:]]+(create|edit)|gist'"$rf"'[[:space:]]+(create|edit)|repo'"$rf"'[[:space:]]+(edit|create)|label'"$rf"'[[:space:]]+(create|edit)|project'"$rf"'[[:space:]]+(item-create|item-edit))[[:space:]]'
     if [[ $padded =~ $re_sub ]]; then return 0; fi
     if [[ $padded =~ [[:space:]]api[[:space:]] ]]; then
         if [[ $padded =~ [[:space:]]graphql[[:space:]] ]]; then
@@ -73,6 +74,8 @@ if [ "$degraded" -eq 1 ]; then
 fi
 
 [ -z "$cmd" ] && exit 0
+# fast path: nothing to check unless the command line mentions gh at all
+case $cmd in *gh*) ;; *) exit 0 ;; esac
 
 write=0
 while IFS= read -r seg; do

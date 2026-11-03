@@ -3,17 +3,17 @@
 # given, because GitHub's default squash body is a list of every commit message and this repo
 # wants a written one. Exit 2 blocks the call and shows stderr to Claude; exit 0 allows.
 #
-# Backslash continuations are joined, and quoted strings and heredoc bodies are masked first, so
+# Backslash continuations are joined, comments dropped, and quoted strings and heredoc bodies are masked first, so
 # text that merely mentions the command (a commit message, a PR body) is not a match. Degraded
 # mode (no jq, no python3): any text that looks like `gh ... pr merge` in the raw event is blocked.
-# Known limits: gh behind bash -c "...", a $(...) inside double quotes, and gh aliases.
+# Known limits: gh inside bash -c "..." or eval "...", backtick substitution inside double quotes, variables that expand to gh, and gh aliases.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
 read_event
 
 block() {
-    echo "BLOCKED: a squash merge needs an explicit written body. Pass --body-file <file> (or --body / -F / -b) together with --subject." >&2
+    echo "BLOCKED: a squash merge needs an explicit written body. Pass --body-file <file> (or --body / -F / -b)." >&2
     echo "$1" >&2
     exit 2
 }
@@ -26,18 +26,22 @@ if [ "$degraded" -eq 1 ]; then
 fi
 
 [ -z "$cmd" ] && exit 0
+# fast path: nothing to check unless the command line mentions gh at all
+case $cmd in *gh*) ;; *) exit 0 ;; esac
 
 while IFS= read -r seg; do
     args=$(gh_args "$seg") || continue
-    [[ " $args " =~ [[:space:]]pr[[:space:]]+merge[[:space:]] ]] || continue
+    re_merge='[[:space:]]pr'"$GH_REPOFLAG"'[[:space:]]+merge[[:space:]]'
+    [[ " $args " =~ $re_merge ]] || continue
 
     squash=0
     body=0
     set -f
     for tok in $args; do
         case $tok in
-            --squash | --squash=true | -s=true) squash=1 ;;
-            --squash=*) ;;
+            --squash=false | --squash=0 | --squash=f | --squash=F | --squash=FALSE | --squash=False) ;;
+            -s=false | -s=0 | -s=f | -s=F | -s=FALSE | -s=False) ;;
+            --squash | --squash=* | -s=*) squash=1 ;;
             --body | --body=* | --body-file | --body-file=*) body=1 ;;
             --*) ;;
             -b=* | -F=*) body=1 ;;
