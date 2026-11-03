@@ -96,6 +96,18 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return list(host, k -> k instanceof AEFluidKey && f.matches(k));
     }
 
+    /** Every stored key of every AE2 key type (items, fluids, and whatever add-ons register, such as FE). */
+    @LuaFunction(value = {"getResources", "listResources"}, mainThread = true)
+    public MethodResult getResources(IInWorldGridNodeHost host, IArguments args) throws LuaException {
+        Filter f = Filter.opt(args, 0, DEFAULT_ITEM_COUNT);
+        return list(host, f::matches);
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getResource(IInWorldGridNodeHost host, IArguments args) throws LuaException {
+        return one(host, Filter.req(args, 0, DEFAULT_ITEM_COUNT), AEKey.class);
+    }
+
     @LuaFunction(mainThread = true)
     public MethodResult getItem(IInWorldGridNodeHost host, IArguments args) throws LuaException {
         return one(host, Filter.req(args, 0, DEFAULT_ITEM_COUNT), AEItemKey.class);
@@ -173,8 +185,9 @@ public final class MeBridgeMethods implements GenericPeripheral {
         ICraftingCPU cpu = null;
         String cpuName = args.optString(1, "");
         if (!cpuName.isEmpty()) {
+            int n = 0;
             for (ICraftingCPU c : cs.getCpus()) {
-                if (cpuName.equals(cpuName(c))) {
+                if (cpuName.equals(cpuLabel(c, ++n))) {
                     cpu = c;
                     break;
                 }
@@ -198,8 +211,9 @@ public final class MeBridgeMethods implements GenericPeripheral {
         if (grid == null) return notConnected(null);
         ICraftingService cs = grid.getCraftingService();
         List<Object> out = new ArrayList<>();
+        int n = 0;
         for (ICraftingCPU cpu : cs.getCpus()) {
-            Map<String, Object> m = cpuInfo(cpu);
+            Map<String, Object> m = cpuInfo(cpu, ++n);
             CraftingJobStatus st = cpu.getJobStatus();
             if (st != null) m.put("craftingJob", job(st, cs));
             out.add(m);
@@ -213,11 +227,13 @@ public final class MeBridgeMethods implements GenericPeripheral {
         if (grid == null) return notConnected(null);
         ICraftingService cs = grid.getCraftingService();
         List<Object> out = new ArrayList<>();
+        int n = 0;
         for (ICraftingCPU cpu : cs.getCpus()) {
+            n++;
             CraftingJobStatus st = cpu.getJobStatus();
             if (st == null) continue;
             Map<String, Object> m = job(st, cs);
-            m.put("cpu", cpuInfo(cpu));
+            m.put("cpu", cpuInfo(cpu, n));
             out.add(m);
         }
         return MethodResult.of(out);
@@ -538,13 +554,14 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return null;
     }
 
-    private static String cpuName(ICraftingCPU cpu) {
-        return cpu.getName() != null ? cpu.getName().getString() : "Unnamed";
+    /** The CPU's own name, or "CPU #n" (n = 1-based position in getCpus()) when unnamed, like AE2's screen. */
+    private static String cpuLabel(ICraftingCPU cpu, int position) {
+        return cpu.getName() != null ? cpu.getName().getString() : "CPU #" + position;
     }
 
-    private static Map<String, Object> cpuInfo(ICraftingCPU cpu) {
+    private static Map<String, Object> cpuInfo(ICraftingCPU cpu, int position) {
         Map<String, Object> m = new HashMap<>();
-        m.put("name", cpuName(cpu));
+        m.put("name", cpuLabel(cpu, position));
         m.put("storage", cpu.getAvailableStorage());
         m.put("coProcessors", cpu.getCoProcessors());
         m.put("isBusy", cpu.isBusy());
@@ -559,7 +576,11 @@ public final class MeBridgeMethods implements GenericPeripheral {
         m.put("count", amount);
         m.put("amount", amount);
         m.put("isCraftable", cs != null && cs.isCraftable(key));
-        m.put("type", key instanceof AEFluidKey ? "fluid" : key instanceof AEItemKey ? "item" : key.getType().toString());
+        String keyType = key.getType().getId().toString();
+        m.put("type", key instanceof AEFluidKey ? "fluid" : key instanceof AEItemKey ? "item" : keyType);
+        m.put("keyType", keyType);
+        String unit = key.getUnitSymbol();
+        if (unit != null) m.put("unit", unit);
         if (key instanceof AEItemKey ik) {
             m.put("maxStackSize", ik.getMaxStackSize());
             m.put("hasComponents", ik.hasComponents());
@@ -582,6 +603,8 @@ public final class MeBridgeMethods implements GenericPeripheral {
      *   name = "minecraft:iron_ingot"   exact id
      *   name = "#c:ingots"              tag (item or fluid tag, by key type)
      *   displayName = "iron"            case-insensitive substring
+     *   keyType = "appflux:flux"        exact AE2 key type id (see the keyType field of getResources)
+     *   type = "item" | "fluid" | an AE2 key type id   same idea, with the short names for items and fluids
      *   count / amount = 64             how many to move or craft
      * Components are not matched: a name matches every variant of that id.
      */
@@ -589,10 +612,12 @@ public final class MeBridgeMethods implements GenericPeripheral {
         final String name;
         final Identifier tag;
         final String displayName;
+        final String keyType;
+        final String type;
         final boolean all;
         final long count;
 
-        private Filter(String name, String displayName, boolean all, long count) throws LuaException {
+        private Filter(String name, String displayName, String keyType, String type, boolean all, long count) throws LuaException {
             if (name != null && name.startsWith("#")) {
                 Identifier id = name.length() > 1 ? Identifier.tryParse(name.substring(1)) : null;
                 if (id == null) throw new LuaException("bad tag: " + name);
@@ -603,6 +628,8 @@ public final class MeBridgeMethods implements GenericPeripheral {
                 this.name = name;
             }
             this.displayName = displayName;
+            this.keyType = keyType;
+            this.type = type;
             this.all = all;
             this.count = count;
         }
@@ -621,25 +648,37 @@ public final class MeBridgeMethods implements GenericPeripheral {
         }
 
         static Filter opt(IArguments args, int i, long defCount) throws LuaException {
-            if (args.count() <= i || args.get(i) == null) return new Filter(null, null, false, defCount);
+            if (args.count() <= i || args.get(i) == null) return new Filter(null, null, null, null, false, defCount);
             Object raw = args.get(i);
-            if (raw instanceof String s) return new Filter(s, null, false, defCount);
+            if (raw instanceof String s) return new Filter(s, null, null, null, false, defCount);
             Map<?, ?> t = args.getTable(i);
             String name = t.get("name") instanceof String s ? s : null;
             String dn = t.get("displayName") instanceof String s ? s.toLowerCase(Locale.ROOT) : null;
+            String keyType = t.get("keyType") instanceof String s ? s : null;
+            String type = t.get("type") instanceof String s ? s : null;
             boolean all = Boolean.TRUE.equals(t.get("all"));
             long count = t.get("count") instanceof Number n ? n.longValue()
                     : t.get("amount") instanceof Number n2 ? n2.longValue() : defCount;
             if (count < 1) throw new LuaException("count must be >= 1");
-            return new Filter(name, dn, all, count);
+            return new Filter(name, dn, keyType, type, all, count);
         }
 
         boolean isEmpty() {
-            return name == null && tag == null && displayName == null;
+            return name == null && tag == null && displayName == null && keyType == null && type == null;
+        }
+
+        private boolean matchesType(AEKey k) {
+            return switch (type) {
+                case "item" -> k instanceof AEItemKey;
+                case "fluid" -> k instanceof AEFluidKey;
+                default -> type.equals(k.getType().getId().toString());
+            };
         }
 
         boolean matches(AEKey k) {
             if (name != null && !name.equals(k.getId().toString())) return false;
+            if (keyType != null && !keyType.equals(k.getType().getId().toString())) return false;
+            if (type != null && !matchesType(k)) return false;
             if (tag != null) {
                 boolean tagged = k instanceof AEItemKey ? k.isTagged(TagKey.create(Registries.ITEM, tag))
                         : k instanceof AEFluidKey && k.isTagged(TagKey.create(Registries.FLUID, tag));
