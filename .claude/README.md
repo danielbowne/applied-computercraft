@@ -38,11 +38,10 @@ Details: `skills/ship-flow/SKILL.md`.
 | On Claude `gh` commands | `hooks/guard-squash-merge.sh` | a squash merge without `--body-file` / `--body` |
 | On Claude `gh` commands | `hooks/block-ai-attribution.sh` | AI attribution in `gh` write commands (PR, issue, release, gist, repo description, `gh api` writes) |
 | In CI | `.github/workflows/build.yml` | `./gradlew build` on every push and PR |
-| In CI | `.github/workflows/build.yml` (workflow_dispatch) | release PRs are made with the workflow token, which starts no workflows; `release-please.yml` dispatches `build` on the release branch so the required check exists on the PR head |
-| In CI | `.github/workflows/release-please.yml`, job `release-please` | opens and updates the release PR from conventional commits; on merge creates the tag and GitHub Release (needs "Allow GitHub Actions to create and approve pull requests" enabled by the owner) |
-| In CI | `.github/workflows/release.yml` (called as job `jar`; also run by hand with a tag) | tag equals `mod_version`, build, jar attached to the existing Release (`--clobber`, so re-runs are safe) |
-| In CI | `.github/workflows/release-please.yml`, job `release-notes` | optional: rewrites the Release body with Claude when the `ANTHROPIC_API_KEY` secret exists (model from the `RELEASE_NOTES_MODEL` variable); never fails the release; keeps the original notes if a link is dropped |
-| In CI | `.github/workflows/release-please.yml`, job `curseforge` | uploads the jar to CurseForge when `CURSEFORGE_PROJECT_ID` is set, using the final Release body; checks the token is non-empty; runs even if `release-notes` was skipped; can be re-run on its own |
+| In CI | `.github/workflows/release-please.yml`, job `release-please` | opens and updates the release PR from conventional commits (with a GitHub App token, so the PR triggers `build.yml` normally); on merge creates the tag and GitHub Release. Needs the `RELEASE_APP_ID` variable and `RELEASE_APP_PRIVATE_KEY` secret. The App approves nothing; the owner merges with `--admin` |
+| In CI | `.github/workflows/release.yml` (job `jar`; also run by hand with a tag) | `build` job (read-only): tag equals `mod_version`, Gradle build, upload the jar. `publish` job (write, no checkout): attach the jar to the Release (`--clobber`) |
+| In CI | `.github/workflows/release-please.yml`, job `release-notes` | optional: rewrites the Release body with Claude when the `ANTHROPIC_API_KEY` secret exists (model from the `RELEASE_NOTES_MODEL` variable); never fails the release; keeps the original notes if a link is dropped or a URL, image, HTML tag or `@mention` is added |
+| In CI | `.github/workflows/curseforge.yml` (job `curseforge`; also run by hand with a tag) | uploads the Release's jar to CurseForge using the Release body as changelog; checks the project id and token; re-run only if it failed (a repeat uploads a duplicate) |
 
 ### Limits worth knowing
 

@@ -4,16 +4,21 @@ name: Release Please
 #
 # 1. release-please keeps one release PR open (version bump in gradle.properties, new section in
 #    CHANGELOG.md). Merging that PR makes it create the tag vX.Y.Z and the GitHub Release.
-# 2. Nothing made with GITHUB_TOKEN starts other workflows, so this file does the follow-up
-#    itself:
-#    - build-release-pr dispatches build.yml on the release PR branch, so the required `build`
-#      check runs on the PR head commit;
+#    It runs with a GitHub App token, not GITHUB_TOKEN: events made by GITHUB_TOKEN start no
+#    other workflows, so the release PR would never get its required `build` check. With the App
+#    token the PR triggers build.yml like any other PR. The App only opens and updates the PR
+#    and creates the tag and Release; it approves nothing, so the owner still merges the PR.
+# 2. The rest happens in this file, after the release exists:
 #    - jar calls release.yml for the new tag (build, attach the jar to the Release);
 #    - release-notes rewrites the Release body with Claude when the ANTHROPIC_API_KEY secret
 #      exists, and quietly keeps release-please's notes otherwise;
-#    - curseforge uploads the jar when the CURSEFORGE_PROJECT_ID repository variable is set.
+#    - curseforge calls curseforge.yml when the CURSEFORGE_PROJECT_ID repository variable is set.
+#    release.yml and curseforge.yml have no tag or release trigger, so the tag the App creates
+#    starts nothing by itself and nothing runs twice.
 #
-# Needs Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests".
+# One-time setup, owner only: a GitHub App with Contents, Pull requests and Issues read-write,
+# webhook off, installed only on this repository; repository variable RELEASE_APP_ID and
+# repository secret RELEASE_APP_PRIVATE_KEY.
 on:
   push:
     branches: [main]
@@ -30,48 +35,29 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      issues: write
-      pull-requests: write
+      contents: read
     outputs:
       release_created: ${{ steps.rp.outputs.release_created }}
       tag_name: ${{ steps.rp.outputs.tag_name }}
       version: ${{ steps.rp.outputs.version }}
-      pr_branch: ${{ steps.pr.outputs.branch }}
     steps:
+      # A short-lived token scoped to this repository and to the three permissions
+      # release-please needs. It is revoked when the job ends.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: rp
         with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-
-      # prs_created is true when a release PR was opened or updated; `pr` is its JSON.
-      - name: Read the release PR branch
-        id: pr
-        if: steps.rp.outputs.prs_created == 'true'
-        env:
-          PR_JSON: ${{ steps.rp.outputs.pr }}
-        run: |
-          branch=$(jq -r '.headBranchName // empty' <<<"$PR_JSON")
-          test -n "$branch" || { echo "release-please reported a PR without a head branch"; exit 1; }
-          echo "branch=$branch" >> "$GITHUB_OUTPUT"
-
-  # A PR pushed with GITHUB_TOKEN does not trigger the push or pull_request run of build.yml.
-  # A workflow_dispatch run on the branch creates the `build` check on the branch head commit,
-  # which is the PR head, so branch protection sees it. It runs again each time release-please
-  # updates the PR.
-  build-release-pr:
-    needs: release-please
-    if: needs.release-please.outputs.pr_branch != ''
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Dispatch build.yml on the release PR branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRANCH: ${{ needs.release-please.outputs.pr_branch }}
-        run: gh workflow run build.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
 
   jar:
     needs: release-please
@@ -110,7 +96,7 @@ jobs:
             echo "ANTHROPIC_API_KEY is not set; keeping release-please's notes"
           fi
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.key.outputs.enabled == 'true'
         with:
           ref: refs/tags/${{ needs.release-please.outputs.tag_name }}
@@ -163,6 +149,12 @@ jobs:
             base=$(git hash-object -t tree /dev/null); range="$TAG"
           fi
 
+          # Write each part to a file first and cut it with head afterwards: piping git into
+          # `head -c` makes git exit 141 under pipefail once the output passes the cap.
+          git log "$range" --format='%s%n%n%b%n---' > part.log || true
+          git diff --stat "$base" "$TAG" > part.stat || true
+          git diff "$base" "$TAG" -- src/main/java README.md > part.diff || true
+
           # About 60k characters in total: notes 10k, commits 14k, stat 4k, diff 30k, then a hard cap.
           {
             echo "Version: $VERSION"
@@ -173,13 +165,13 @@ jobs:
             head -c 10000 original.md
             echo
             echo "=== COMMITS ==="
-            git log "$range" --format='%s%n%n%b%n---' | head -c 14000
+            head -c 14000 part.log
             echo
             echo "=== DIFF STAT ==="
-            git diff --stat "$base" "$TAG" | head -c 4000
+            head -c 4000 part.stat
             echo
             echo "=== DIFF OF src/main/java AND README.md (may be cut short) ==="
-            git diff "$base" "$TAG" -- src/main/java README.md | head -c 30000
+            head -c 30000 part.diff
           } > input.full
           head -c 60000 input.full > input.md
 
@@ -199,7 +191,7 @@ jobs:
             -H "anthropic-beta: server-side-fallback-2026-07-01" \
             -d @request.json > response.json || { head -c 2000 response.json; echo; warn "the API call failed"; }
 
-          stop=$(jq -r '.stop_reason // ""' response.json)
+          stop=$(jq -r '.stop_reason // ""' response.json) || warn "unreadable response"
           test "$stop" != "refusal" || warn "the model refused the request"
           test "$stop" != "max_tokens" || warn "the answer was cut off at max_tokens"
           jq -r '.content[] | select(.type == "text") | .text' response.json > final.raw || warn "could not read the answer"
@@ -209,8 +201,29 @@ jobs:
           grep -q '[^[:space:]]' final.md || warn "the answer was empty"
           if grep -qiE 'claude|anthropic' final.md; then warn "the answer named the tool"; fi
 
+          # The rewrite may reorganize the text but must not add anything that renders or notifies.
+          if grep -qiE '!\[|<img|<a |<script|<iframe' final.md; then
+            warn "the answer contains an image, link tag, script or iframe"
+          fi
+          urls() { { grep -oE 'https?://[^) >"]+' "$1" || true; } | sed -E 's/[.,;:]+$//' | sort -u; }
+          urls original.md > original.urls
+          urls final.md > final.urls
+          comm -13 original.urls final.urls > added.txt
+          if test -s added.txt; then
+            echo "URLs not in the original notes:"; cat added.txt
+            warn "the answer added links that are not in the original notes"
+          fi
+          mentions() { { grep -oE '@[A-Za-z0-9][A-Za-z0-9-]*' "$1" || true; } | sort -u; }
+          mentions original.md > original.at
+          mentions final.md > final.at
+          comm -13 original.at final.at > added-at.txt
+          if test -s added-at.txt; then
+            echo "Mentions not in the original notes:"; cat added-at.txt
+            warn "the answer added an @mention"
+          fi
+
           # Every link in the original notes must survive the rewrite.
-          grep -oE 'https://github\.com/[^) >]+' original.md | sort -u | while read -r url; do
+          { grep -oE 'https://github\.com/[^) >]+' original.md || true; } | sort -u | while read -r url; do
             grep -qF "$url" final.md || echo "$url"
           done > missing.txt
           if test -s missing.txt; then
@@ -221,50 +234,15 @@ jobs:
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file final.md || warn "could not update the release"
           echo "Release notes for $TAG rewritten with $MODEL"
 
-  # Runs whether or not release-notes ran, failed or was skipped (always()), as long as the jar
-  # exists. Skipped entirely when there was no release or CURSEFORGE_PROJECT_ID is unset.
+  # Runs whether or not release-notes ran, failed or was skipped, as long as the jar was
+  # attached. Skipped when there was no release or CURSEFORGE_PROJECT_ID is unset.
   curseforge:
     needs: [release-please, jar, release-notes]
-    if: always() && needs.jar.result == 'success' && vars.CURSEFORGE_PROJECT_ID != ''
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && needs.jar.result == 'success' && vars.CURSEFORGE_PROJECT_ID != '' }}
     permissions:
       contents: read
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: release-jar
-          path: dist
-
-      # The changelog is whatever the GitHub Release says now (rewritten or not).
-      - name: Fetch the release notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.release-please.outputs.tag_name }}
-        run: |
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > notes.md
-          test -s notes.md || { echo "The release body of $TAG is empty"; exit 1; }
-
-      # mc-publish quietly skips a platform whose token is empty, which would look like success.
-      - name: Check the CurseForge token is set
-        env:
-          CF_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
-        run: test -n "$CF_TOKEN" || { echo "CURSEFORGE_PROJECT_ID is set but the CURSEFORGE_TOKEN secret is empty"; exit 1; }
-
-      - name: Publish to CurseForge
-        uses: Kira-NT/mc-publish@c23376546a97f5ba7984e94445da359459b14419 # v3.3.2
-        with:
-          curseforge-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
-          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
-          files: dist/*.jar
-          name: Applied ComputerCraft ${{ needs.release-please.outputs.version }} (26.1.2)
-          version: ${{ needs.release-please.outputs.version }}
-          version-type: release
-          changelog-file: notes.md
-          loaders: neoforge
-          game-versions: 26.1.2
-          game-version-filter: none
-          java: 25
-          environment: server | client?
-          dependencies: |
-            ae2(required){curseforge:applied-energistics-2}
-            computercraft(required){curseforge:cc-tweaked}
+    uses: ./.github/workflows/curseforge.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets:
+      CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
