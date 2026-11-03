@@ -15,24 +15,30 @@ src/main/java/io/github/danielbowne/appliedcc/
   CraftJobs.java        per-computer pending crafting requests and the me_crafting event
   MeBridgeMethods.java  every Lua-visible method, filter parsing, export and import
 src/main/templates/META-INF/neoforge.mods.toml   mod metadata, filled from gradle.properties
-.github/workflows/      build.yml (every push and PR), release.yml (tag push)
+.github/workflows/      build.yml (every push and PR), release-please.yml (push to main: release PR, then the release), release.yml (jar for a tag)
+release-please-config.json, .release-please-manifest.json   release-please settings and the last released version
 ```
 
 ## Build
 
 `./gradlew build` with JDK 25. The jar lands in `build/libs/` and its name carries the Minecraft version (`appliedcc-neoforge-26.1.2-<mod_version>.jar`).
 
-The dependency versions in `gradle.properties` (`neo_version`, `ae2_version`, `cc_version`) are the oldest each dependency is compiled against. `neoforge.mods.toml` declares them as minimums (`[x,)`). Do not bump one just to track the latest; raise a floor only when the code needs an API from the newer version, and say so in the PR and CHANGELOG.
+The dependency versions in `gradle.properties` (`neo_version`, `ae2_version`, `cc_version`) are the oldest each dependency is compiled against. `neoforge.mods.toml` declares them as minimums (`[x,)`). Do not bump one just to track the latest; raise a floor only when the code needs an API from the newer version, and say so in the PR and the commit message (use a `fix:` or `feat:` type so it releases).
 
 ## Versioning and release
 
-- Semver in `mod_version` (`gradle.properties`). Stay on 0.x until the Lua API is considered stable.
-- A release is cut only for a change that ends up in the jar: `src/`, resources, the `neoforge.mods.toml` template, or a dependency or build-version change. CI, docs, README and `.claude/` changes merge to `main` with no version bump and no tag.
-- Every release needs a `## X.Y.Z` section in `CHANGELOG.md`.
-- Pushing tag `vX.Y.Z` (it must equal `v` + `mod_version`) runs `release.yml`, which has two jobs:
-  - `release` builds, checks the tag against `mod_version`, extracts that changelog section, creates the GitHub Release (it skips creation if the release already exists, so a re-run is safe) and uploads the jar and notes as an artifact.
-  - `curseforge` needs `release` and runs only when the `CURSEFORGE_PROJECT_ID` repo variable is set (it is). It checks that the `CURSEFORGE_TOKEN` secret is non-empty and uploads the jar with mc-publish.
-- Recovery: if only `curseforge` fails, fix the cause and re-run that job from the Actions page (no new version). If `release` fails before the GitHub Release exists, the tag can be deleted and re-pushed on the same commit. Once a GitHub Release is published it is never deleted or reused; for a code problem, bump the patch version.
+Releases are automatic: release-please reads the conventional commits on `main`, picks the next version, keeps a release PR open, and the owner merges that PR to release. Nobody edits `mod_version` in `gradle.properties` or `CHANGELOG.md` by hand any more; release-please writes both (`mod_version` sits between `x-release-please-start-version` and `x-release-please-end` comment lines, which it uses to find it; leave those lines alone).
+
+- The commit type decides the version. Squash merges use the PR title as the commit subject, so the PR title must be a conventional commit. While the version is 0.x: `feat` bumps minor, `fix` and `perf` bump patch, a breaking change (`feat!:` or a `BREAKING CHANGE:` footer) also bumps minor. `docs`, `ci`, `chore`, `test`, `refactor` and `build` are hidden from the changelog and never open a release PR on their own. That matches "release only for a change that ends up in the jar": a change to `src/`, resources, the `neoforge.mods.toml` template, or a dependency or build-version change that reaches the jar must be committed as `feat`, `fix` or `perf` (for example `fix: raise the AE2 floor to 26.1.13`). Stay on 0.x until the Lua API is considered stable.
+- `Release-As: x.y.z` in a commit body forces a version when needed.
+- release-please keeps one release PR open (branch `release-please--branches--main`, title `chore: release X.Y.Z`) and updates it as `main` moves. A PR made with the workflow token does not start other workflows, so `release-please.yml` dispatches `build.yml` on that branch; the dispatched `build` run is the required check on the PR.
+- The owner merges the release PR once its `build` is green, with `gh pr merge <n> --squash --admin --subject "chore: release X.Y.Z (#<n>)" --body-file <file>` (see the `release` skill). The merge makes release-please create the tag `vX.Y.Z` and the GitHub Release (notes = the new CHANGELOG section), and `release-please.yml` then runs:
+  - `jar` (calls `release.yml`): checks the tag equals `v` + `mod_version`, builds, and attaches the jar to the existing Release.
+  - `release-notes`: only if the `ANTHROPIC_API_KEY` secret exists, rewrites the Release body with Claude (model from the `RELEASE_NOTES_MODEL` variable, default `claude-opus-5-5`). Any failure keeps release-please's notes and never fails the release.
+  - `curseforge`: needs `jar`, runs after `release-notes` whether or not it ran, and only when the `CURSEFORGE_PROJECT_ID` repo variable is set (it is). It checks that the `CURSEFORGE_TOKEN` secret is non-empty and uploads the jar with mc-publish, using the final Release body as the changelog.
+- Repo setting the owner must enable once: Settings > Actions > General > "Allow GitHub Actions to create and approve pull requests". Without it release-please cannot open the release PR.
+- Recovery: re-run the failed jobs of the `Release Please` run from the Actions page (a failed `curseforge` alone is safe to re-run). To rebuild and re-attach the jar of an existing tag, run `release.yml` from the Actions page (workflow_dispatch) with the tag. Once a GitHub Release is published it is never deleted or reused; for a code problem, fix it with a `fix:` commit and release the next patch.
+- The existing `## 0.1.0` and `## 0.2.0` CHANGELOG sections were hand-written; release-please adds its own `## [x.y.z](compare-url) (date)` sections above them.
 - Steps are in `.claude/skills/release/SKILL.md`.
 - CurseForge shows the environment as Client + Server; it cannot show "client optional", so the description has to say clients do not need the mod.
 - CC: Tweaked no longer publishes to CurseForge (its CurseForge page points to Modrinth). The CurseForge description must tell players to get CC: Tweaked for 26.1.2 from Modrinth. The dependency on it stays `required`.
@@ -41,7 +47,7 @@ The dependency versions in `gradle.properties` (`neo_version`, `ae2_version`, `c
 
 One branch per Minecraft version: `main` is 26.1.2, later ones are `mc-26.2` and so on. Fixes land on the oldest supported branch and are carried forward to the newer ones.
 
-Jar names carry the Minecraft version, but tags and GitHub Release titles come from `mod_version`, so two branches releasing the same number would collide. The rule that avoids it: version branches carry the Minecraft version in `mod_version` as semver build metadata, for example `0.2.0+mc26.2`, tagged `v0.2.0+mc26.2` (and a `## 0.2.0+mc26.2` changelog heading). `main` keeps plain versions (`0.2.0`). When you create a version branch, edit on that branch: `minecraft_version`, `minecraft_version_range`, the dependency floors, `mod_version`, and in the `curseforge` job of `release.yml` the `game-versions` and the CurseForge display `name:` line. Check on the first release from a new branch that the loader accepts a `+` in the mod version.
+Jar names carry the Minecraft version, but tags and GitHub Release titles come from `mod_version`, so two branches releasing the same number would collide. The rule that avoids it: version branches carry the Minecraft version in `mod_version` as semver build metadata, for example `0.2.0+mc26.2`, tagged `v0.2.0+mc26.2`. `main` keeps plain versions (`0.2.0`). The release-please setup covers `main` only (`release-please.yml` runs on pushes to `main`). When you create a version branch, edit on that branch: `minecraft_version`, `minecraft_version_range`, the dependency floors, `mod_version`, and in the `curseforge` job of `release-please.yml` the `game-versions` and the CurseForge display `name:` line, and decide then how releases are cut there (it needs its own release-please config and workflow trigger for that branch, and the `+mcXX` build metadata does not come from conventional commits). Check on the first release from a new branch that the loader accepts a `+` in the mod version.
 
 ## Code rules
 
@@ -57,13 +63,13 @@ These were learned the hard way.
 ## Lua API rules
 
 - Method names and argument order follow Advanced Peripherals' ME Bridge where the two overlap. Differences are listed under "Coming from Advanced Peripherals" in the README.
-- Every Lua-visible change (new method, changed return, new filter field, new event) is documented in `README.md` (Methods, Filters, Coming from Advanced Peripherals as relevant) and `CHANGELOG.md` in the same PR.
+- Every Lua-visible change (new method, changed return, new filter field, new event) is documented in `README.md` (Methods, Filters, Coming from Advanced Peripherals as relevant) in the same PR. `CHANGELOG.md` is written by release-please from commit subjects, so make the PR title a clear, user-facing line, and put details in the commit body (the release-notes job reads the bodies). A change that may break existing scripts is a breaking commit: `feat!:` or `fix!:` plus a `BREAKING CHANGE:` footer saying what changes.
 - Failure returns `nil` / `0` / `false` plus a status string such as `NOT_CONNECTED`, `NOT_FOUND`, `INVENTORY_NOT_FOUND`. Throw `LuaException` only for bad arguments and for features the server config has turned off.
 
 ## Git and PR rules
 
 - Never commit to `main`. Branches are `<type>/<slug>` where type is one of `feat`, `fix`, `chore`, `docs`, `refactor`, `ci`, `build`, `test`, `release`, `perf`.
-- Commit messages are conventional commits.
+- Commit messages are conventional commits, and so are PR titles (squash merges use the title as the commit subject, and release-please reads it to pick the version).
 - Squash merges only, with an explicit subject and body.
 - Branch protection on `main` requires a PR, one approving review, a passing `build` check, an up-to-date branch, resolved conversations and linear history; only squash merges are allowed. `gh pr merge --admin` bypasses all of those, including unresolved conversations. It is owner-only and is used only after `build` is green on a branch that is up to date with `main` (update the branch and re-run CI if it is behind) and after conversations are resolved.
 - No AI attribution anywhere: commits, PRs, issues, comments, release notes. No `Co-Authored-By` for tools, no session links, no "generated with" lines. Enforcement is partial: the git hooks in `.githooks/` are opt-in (`git config core.hooksPath .githooks`), the Claude hooks only see commands Claude runs, and `pre-commit` refuses `main` only (version branches such as `mc-26.2` are allowed by design). See `.claude/README.md` for what each gate covers.

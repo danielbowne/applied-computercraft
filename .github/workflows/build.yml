@@ -1,9 +1,13 @@
 name: Build
 
+# workflow_dispatch exists for release PRs: release-please opens them with GITHUB_TOKEN,
+# and GitHub does not start workflows for events made by that token, so release-please.yml
+# dispatches this workflow on the release branch to produce the required `build` check.
 on:
   push:
     branches: ['**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

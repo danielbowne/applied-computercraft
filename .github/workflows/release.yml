@@ -1,13 +1,32 @@
 name: Release
 
-# Push a tag like v0.1.0 to build the jar and publish a GitHub Release with it.
-# The tag must match mod_version in gradle.properties.
-# If the CURSEFORGE_PROJECT_ID repository variable is set, a second job uploads the
-# same jar to CurseForge using the CURSEFORGE_TOKEN secret. It is a separate job so a
-# failed upload can be re-run on its own without touching the GitHub Release.
+# Build the jar for a tag and attach it to that tag's GitHub Release.
+#
+# Normally called from release-please.yml right after release-please creates the tag and the
+# Release (tags made with GITHUB_TOKEN do not trigger other workflows, so there is no tag-push
+# trigger here). It can also be run by hand from the Actions page with a tag, to rebuild and
+# re-attach the jar of an existing release (for example after a failed run).
+#
+# The tag must equal v + mod_version in gradle.properties at that tag. If the GitHub Release
+# does not exist yet (a manual run on an old tag), it is created with the tag's section of
+# CHANGELOG.md as notes.
 on:
-  push:
-    tags: ['v*']
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to build, for example v0.3.0
+        required: true
+        type: string
+    outputs:
+      mod_version:
+        description: mod_version at the tag
+        value: ${{ jobs.release.outputs.mod_version }}
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build, for example v0.3.0
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,9 +38,12 @@ jobs:
       contents: write
     outputs:
       mod_version: ${{ steps.version.outputs.mod_version }}
+    env:
+      TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: refs/tags/${{ inputs.tag }}
           persist-credentials: false
       - uses: actions/setup-java@v6
         with:
@@ -33,71 +55,40 @@ jobs:
         id: version
         run: |
           v=$(grep '^mod_version=' gradle.properties | cut -d= -f2)
-          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME does not match mod_version $v"; exit 1
+          if [ "v$v" != "$TAG" ]; then
+            echo "tag $TAG does not match mod_version $v"; exit 1
           fi
-          echo "MOD_VERSION=$v" >> "$GITHUB_ENV"
           echo "mod_version=$v" >> "$GITHUB_OUTPUT"
 
       - run: ./gradlew build
 
-      - name: Pull this version's notes from CHANGELOG.md
-        run: |
-          awk -v v="## $MOD_VERSION" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
-          test -s notes.md || { echo "CHANGELOG.md has no '## $MOD_VERSION' section"; exit 1; }
-
-      # On a re-run the release already exists; leave it as it is.
-      - name: Publish GitHub Release
+      # release-please creates the Release with its own notes; this job only adds the jar.
+      # The fallback covers a tag without a Release: it takes the tag's section of CHANGELOG.md,
+      # whether the heading is "## 0.2.0" (hand-written) or "## [0.3.0](compare-url) (date)".
+      - name: Attach the jar to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          MOD_VERSION: ${{ steps.version.outputs.mod_version }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME already exists, leaving it as is"
+          title="Applied ComputerCraft $MOD_VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$title"
+            gh release upload "$TAG" build/libs/*.jar --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" build/libs/*.jar --repo "$GITHUB_REPOSITORY" \
-              --title "Applied ComputerCraft $MOD_VERSION" --notes-file notes.md
+            awk -v v="$MOD_VERSION" '
+              /^## / {
+                if (found) exit
+                h = $0; sub(/^## \[?/, "", h); split(h, a, /[] (]/)
+                if (a[1] == v) { found = 1; next }
+              }
+              found' CHANGELOG.md > notes.md
+            test -s notes.md || { echo "No GitHub Release for $TAG and CHANGELOG.md has no section for $MOD_VERSION"; exit 1; }
+            gh release create "$TAG" build/libs/*.jar --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$title" --notes-file notes.md
           fi
 
       - uses: actions/upload-artifact@v7
         with:
           name: release-jar
-          path: |
-            build/libs/*.jar
-            notes.md
+          path: build/libs/*.jar
           retention-days: 7
-
-  curseforge:
-    needs: release
-    if: ${{ vars.CURSEFORGE_PROJECT_ID != '' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: release-jar
-
-      # mc-publish quietly skips a platform whose token is empty, which would look like success.
-      - name: Check the CurseForge token is set
-        env:
-          CF_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
-        run: test -n "$CF_TOKEN" || { echo "CURSEFORGE_PROJECT_ID is set but the CURSEFORGE_TOKEN secret is empty"; exit 1; }
-
-      - name: Publish to CurseForge
-        uses: Kira-NT/mc-publish@c23376546a97f5ba7984e94445da359459b14419 # v3.3.2
-        with:
-          curseforge-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
-          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
-          files: build/libs/*.jar
-          name: Applied ComputerCraft ${{ needs.release.outputs.mod_version }} (26.1.2)
-          version: ${{ needs.release.outputs.mod_version }}
-          version-type: release
-          changelog-file: notes.md
-          loaders: neoforge
-          game-versions: 26.1.2
-          game-version-filter: none
-          java: 25
-          environment: server | client?
-          dependencies: |
-            ae2(required){curseforge:applied-energistics-2}
-            computercraft(required){curseforge:cc-tweaked}

@@ -17,7 +17,7 @@ You are a build worker for Applied ComputerCraft. The orchestrating session hand
 - No AI attribution anywhere: commit messages, code comments, docs, PR text.
 - Regular hyphens, never em dashes, in any prose you write.
 - Run `./gradlew build` before committing when a JDK 25 is available. If there is no JDK 25, say so plainly in the report and do not claim the build passed.
-- Lua-visible changes update `README.md` and `CHANGELOG.md` in the same commit (see the Lua API rules in `CLAUDE.md`).
+- Lua-visible changes update `README.md` in the same commit (see the Lua API rules in `CLAUDE.md`). Do not edit `CHANGELOG.md` or `mod_version`: release-please writes both from the commit subjects, so make the commit subject a clear user-facing conventional commit and put details in the body.
 - Commit with a message file: `git commit -F <file>`. Then verify with `git log -1` and `git status --short`.
 
 ## Report format
