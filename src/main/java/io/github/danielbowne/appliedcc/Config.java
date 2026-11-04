@@ -33,7 +33,7 @@ final class Config {
                         "which makes it harder to tap someone else's network from a cable.")
                 .define("allowOnCables", true);
         ALLOW_NETWORK_INFO = b.comment("Allow the read-only network inspection methods: getDrives, getCells, the storage capacity",
-                        "methods, getChannelInfo, getDevices, getPatterns and getPendingRequests.")
+                        "methods, getChannelInfo, getDevices, getPatterns, getPatternCapacity and getPendingRequests.")
                 .define("allowNetworkInfo", true);
         EXPOSE_DRIVE_POSITIONS = b.comment("Include the block position of each drive and ME chest in getDrives and getCells.",
                         "Set false to hide where the storage of a network is.")

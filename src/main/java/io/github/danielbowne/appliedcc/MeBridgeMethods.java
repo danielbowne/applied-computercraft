@@ -385,6 +385,16 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return p.truncated() ? MethodResult.of(p.list(), "TRUNCATED") : MethodResult.of(p.list());
     }
 
+    /**
+     * getPatternCapacity(): {used, total, free, hosts = {{name, id, count, used, total, free}, ...}},
+     * the pattern slots of every pattern provider and Assembler Matrix pattern core on the grid.
+     */
+    @LuaFunction(mainThread = true)
+    public MethodResult getPatternCapacity(IInWorldGridNodeHost host) throws LuaException {
+        IGrid grid = infoGrid(host);
+        return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.patternCapacity(grid));
+    }
+
     @LuaFunction(mainThread = true)
     public MethodResult getPendingRequests(IInWorldGridNodeHost host) throws LuaException {
         IGrid grid = infoGrid(host);
