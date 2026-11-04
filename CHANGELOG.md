@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/danielbowne/applied-computercraft/compare/v0.2.0...v0.3.0) (2026-11-04)
+
+
+### Features
+
+* expose drives, cells, storage, channels, devices, patterns and pending requests ([#7](https://github.com/danielbowne/applied-computercraft/issues/7)) ([f4eaf36](https://github.com/danielbowne/applied-computercraft/commit/f4eaf3646df6e64510a7c98d0c16fc64bc99ad0d)), closes [#3](https://github.com/danielbowne/applied-computercraft/issues/3)
+
 ## 0.2.0
 
 ### Added
