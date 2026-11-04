@@ -15,7 +15,7 @@ Five independent lanes, one agent each. The defaults target the mod code:
 2. **item-fluid-safety**: duplication or loss in export and import, transaction misuse, exceptions between extract and insert.
 3. **security-multiplayer**: access to other players' networks, config switches respected, unbounded work (crafts, large lists).
 4. **build-packaging-ci**: gradle, `neoforge.mods.toml` (sides, version ranges), workflows, release and tag rules.
-5. **api-contract-docs**: README and CHANGELOG match the code, Advanced Peripherals compatibility claims are accurate.
+5. **api-contract-docs**: README matches the code, PR title type fits the change (release-please reads the squash subject), CHANGELOG and `mod_version` are untouched (except when creating a Minecraft-version branch), Advanced Peripherals compatibility claims are accurate.
 
 Each lane returns only: claim, evidence, caveat, source link, `file:line`, confidence.
 

@@ -59,14 +59,14 @@ const DEFAULT_LANES = [
     name: 'build-packaging-ci',
     focus: [
       'Build, packaging and CI.',
-      'Check: build.gradle and gradle.properties (dependency floors are the oldest version compiled against and are declared as minimums); src/main/templates/META-INF/neoforge.mods.toml (sides, version ranges, ordering) still honours the promise that clients do not need the mod; nothing added to registries or network payloads; .github/workflows (build.yml, release.yml): actions versions, tag-equals-mod_version check, CHANGELOG section extraction, CurseForge upload gating; mod_version vs CHANGELOG consistency; jar naming.',
+      'Check: build.gradle and gradle.properties (dependency floors are the oldest version compiled against and are declared as minimums); src/main/templates/META-INF/neoforge.mods.toml (sides, version ranges, ordering) still honours the promise that clients do not need the mod; nothing added to registries or network payloads; .github/workflows (build.yml, release.yml, release-please.yml) and release-please-config.json: actions pinned and versions, tag-equals-mod_version check, release-please config keys, CurseForge upload gating, the x-release-please annotations around mod_version in gradle.properties kept intact; mod_version and CHANGELOG.md changed only by release-please, never by hand (except when creating a Minecraft-version branch, see CLAUDE.md); jar naming.',
     ].join(' '),
   },
   {
     name: 'api-contract-docs',
     focus: [
       'Lua API contract and documentation.',
-      'Check: README.md (Methods, Filters, Coming from Advanced Peripherals, Server config) and CHANGELOG.md match the code in the diff; every Lua-visible change is documented in the same change; method names and argument order follow Advanced Peripherals\' ME Bridge where they overlap and the compatibility claims are accurate; status strings and event payloads (me_crafting) documented match what the code returns; config table matches Config.java.',
+      'Check: README.md (Methods, Filters, Coming from Advanced Peripherals, Server config) matches the code in the diff, and the PR title/commit type fits the change (release-please turns the squash subject into the version and the changelog line); every Lua-visible change is documented in the same change; method names and argument order follow Advanced Peripherals\' ME Bridge where they overlap and the compatibility claims are accurate; status strings and event payloads (me_crafting) documented match what the code returns; config table matches Config.java.',
     ].join(' '),
   },
 ]

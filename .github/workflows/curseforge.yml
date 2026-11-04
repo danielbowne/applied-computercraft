@@ -1,0 +1,74 @@
+name: CurseForge
+
+# Upload a release's jar to CurseForge. Called from release-please.yml after the jar is attached,
+# and runnable by hand from the Actions page with a tag.
+#
+# The jar comes from the GitHub Release asset and the changelog from the Release body (so it is
+# the rewritten notes when those exist), never from a run artifact, so this works at any time
+# after the release. Run it once per release: a second run uploads a duplicate file. When a
+# run of the called job failed, re-run just that failed job, never a successful one.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag, for example v0.3.0
+        required: true
+        type: string
+    secrets:
+      CURSEFORGE_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v0.3.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  curseforge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check the CurseForge settings
+        id: cfg
+        env:
+          CF_PROJECT: ${{ vars.CURSEFORGE_PROJECT_ID }}
+          CF_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+        run: |
+          test -n "$CF_PROJECT" || { echo "The CURSEFORGE_PROJECT_ID repository variable is not set"; exit 1; }
+          # mc-publish quietly skips a platform whose token is empty, which would look like success.
+          test -n "$CF_TOKEN" || { echo "CURSEFORGE_PROJECT_ID is set but the CURSEFORGE_TOKEN secret is empty"; exit 1; }
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch the jar and the notes from the GitHub Release
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.jar' --dir dist
+          ls dist/*.jar
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > notes.md
+          test -s notes.md || { echo "The release body of $TAG is empty"; exit 1; }
+
+      - name: Publish to CurseForge
+        uses: Kira-NT/mc-publish@c23376546a97f5ba7984e94445da359459b14419 # v3.3.2
+        with:
+          curseforge-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
+          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
+          files: dist/*.jar
+          name: Applied ComputerCraft ${{ steps.cfg.outputs.version }} (26.1.2)
+          version: ${{ steps.cfg.outputs.version }}
+          version-type: release
+          changelog-file: notes.md
+          loaders: neoforge
+          game-versions: 26.1.2
+          game-version-filter: none
+          java: 25
+          environment: server | client?
+          dependencies: |
+            ae2(required){curseforge:applied-energistics-2}
+            computercraft(required){curseforge:cc-tweaked}

@@ -1,103 +1,123 @@
 name: Release
 
-# Push a tag like v0.1.0 to build the jar and publish a GitHub Release with it.
-# The tag must match mod_version in gradle.properties.
-# If the CURSEFORGE_PROJECT_ID repository variable is set, a second job uploads the
-# same jar to CurseForge using the CURSEFORGE_TOKEN secret. It is a separate job so a
-# failed upload can be re-run on its own without touching the GitHub Release.
+# Build the jar for a tag and attach it to that tag's GitHub Release.
+#
+# Normally called from release-please.yml right after release-please creates the tag and the
+# Release. There is deliberately no tag or release trigger here: release-please.yml is the only
+# caller, so a release cannot be built twice. It can also be run by hand from the Actions page
+# with a tag, to rebuild and re-attach the jar of an existing release (for example when
+# release-please created the Release but its workflow failed before this ran).
+#
+# The tag must equal v + mod_version in gradle.properties at that tag. If the GitHub Release
+# does not exist yet (a manual run on an old tag), it is created with the tag's section of
+# CHANGELOG.md as notes.
+#
+# Two jobs, so the job that runs Gradle on the tag's code never holds write access:
+#   build   contents: read    checkout, verify the version, ./gradlew build, upload the jar
+#   publish contents: write   download the jar, attach it to the Release; no checkout, no Gradle
 on:
-  push:
-    tags: ['v*']
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to build, for example v0.3.0
+        required: true
+        type: string
+    outputs:
+      mod_version:
+        description: mod_version at the tag
+        value: ${{ jobs.publish.outputs.mod_version }}
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build, for example v0.3.0
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     outputs:
       mod_version: ${{ steps.version.outputs.mod_version }}
+    env:
+      TAG: ${{ inputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: refs/tags/${{ inputs.tag }}
           persist-credentials: false
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           java-version: '25'
           distribution: 'temurin'
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
 
       - name: Check tag matches mod_version
         id: version
         run: |
           v=$(grep '^mod_version=' gradle.properties | cut -d= -f2)
-          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME does not match mod_version $v"; exit 1
+          if [ "v$v" != "$TAG" ]; then
+            echo "tag $TAG does not match mod_version $v"; exit 1
           fi
-          echo "MOD_VERSION=$v" >> "$GITHUB_ENV"
           echo "mod_version=$v" >> "$GITHUB_OUTPUT"
 
       - run: ./gradlew build
 
-      - name: Pull this version's notes from CHANGELOG.md
-        run: |
-          awk -v v="## $MOD_VERSION" '$0==v{f=1;next} /^## /{f=0} f' CHANGELOG.md > notes.md
-          test -s notes.md || { echo "CHANGELOG.md has no '## $MOD_VERSION' section"; exit 1; }
-
-      # On a re-run the release already exists; leave it as it is.
-      - name: Publish GitHub Release
+      # Stage the jar, plus the tag's CHANGELOG section for the case where the Release does not
+      # exist yet. The heading may be "## 0.2.0" (hand-written) or "## [0.3.0](compare-url) (date)".
+      - name: Stage the jar and the changelog section
         env:
-          GH_TOKEN: ${{ github.token }}
+          MOD_VERSION: ${{ steps.version.outputs.mod_version }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME already exists, leaving it as is"
-          else
-            gh release create "$GITHUB_REF_NAME" build/libs/*.jar --repo "$GITHUB_REPOSITORY" \
-              --title "Applied ComputerCraft $MOD_VERSION" --notes-file notes.md
-          fi
+          mkdir dist
+          cp build/libs/*.jar dist/
+          awk -v v="$MOD_VERSION" '
+            /^## / {
+              if (found) exit
+              h = $0; sub(/^## \[?/, "", h); split(h, a, /[] (]/)
+              if (a[1] == v) { found = 1; next }
+            }
+            found' CHANGELOG.md > dist/notes.md
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-jar
-          path: |
-            build/libs/*.jar
-            notes.md
+          path: dist/
           retention-days: 7
+          # Lets "Re-run all jobs" replace the artifact instead of failing with 409. Prefer
+          # re-running only the failed jobs.
+          overwrite: true
 
-  curseforge:
-    needs: release
-    if: ${{ vars.CURSEFORGE_PROJECT_ID != '' }}
+  publish:
+    needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
+    outputs:
+      mod_version: ${{ needs.build.outputs.mod_version }}
+    env:
+      TAG: ${{ inputs.tag }}
+      MOD_VERSION: ${{ needs.build.outputs.mod_version }}
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: release-jar
+          path: dist
 
-      # mc-publish quietly skips a platform whose token is empty, which would look like success.
-      - name: Check the CurseForge token is set
-        env:
-          CF_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
-        run: test -n "$CF_TOKEN" || { echo "CURSEFORGE_PROJECT_ID is set but the CURSEFORGE_TOKEN secret is empty"; exit 1; }
-
-      - name: Publish to CurseForge
-        uses: Kira-NT/mc-publish@c23376546a97f5ba7984e94445da359459b14419 # v3.3.2
-        with:
-          curseforge-id: ${{ vars.CURSEFORGE_PROJECT_ID }}
-          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
-          files: build/libs/*.jar
-          name: Applied ComputerCraft ${{ needs.release.outputs.mod_version }} (26.1.2)
-          version: ${{ needs.release.outputs.mod_version }}
-          version-type: release
-          changelog-file: notes.md
-          loaders: neoforge
-          game-versions: 26.1.2
-          game-version-filter: none
-          java: 25
-          environment: server | client?
-          dependencies: |
-            ae2(required){curseforge:applied-energistics-2}
-            computercraft(required){curseforge:cc-tweaked}
+      # release-please creates the Release with its own notes; this job only adds the jar.
+      - name: Attach the jar to the GitHub Release
+        run: |
+          title="Applied ComputerCraft $MOD_VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$title"
+            gh release upload "$TAG" dist/*.jar --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            test -s dist/notes.md || { echo "No GitHub Release for $TAG and CHANGELOG.md has no section for $MOD_VERSION"; exit 1; }
+            gh release create "$TAG" dist/*.jar --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "$title" --notes-file dist/notes.md
+          fi

@@ -131,7 +131,7 @@ AE2 has no access control of its own. Anyone who can place a computer next to a 
 
 `./gradlew build` with JDK 25. The jar ends up in `build/libs/`.
 
-Pushing a tag such as `v0.1.0` that matches `mod_version` in `gradle.properties` builds the jar. It then publishes a GitHub Release, using that version's section of `CHANGELOG.md` as the notes. When the `CURSEFORGE_PROJECT_ID` repository variable is set, a second job uploads the same jar to CurseForge with the `CURSEFORGE_TOKEN` secret (it fails if the secret is empty). If only that job fails, re-run it from the Actions page; the GitHub Release is not touched.
+Releases are automatic. Conventional commits on `main` decide the version (`feat` bumps minor, `fix` and `perf` bump patch, a breaking change bumps minor while the version is 0.x; `docs`, `ci`, `chore`, `test`, `refactor` and `build` never release), and [release-please](https://github.com/googleapis/release-please) keeps a release PR open that bumps `mod_version` in `gradle.properties` and adds the new section to `CHANGELOG.md`. Merging that PR creates the tag and the GitHub Release; the workflow then builds the jar, attaches it to the Release and, when the `CURSEFORGE_PROJECT_ID` repository variable is set, uploads it to CurseForge with the `CURSEFORGE_TOKEN` secret (it fails if the secret is empty). If the `ANTHROPIC_API_KEY` secret is set, the Release notes are also rewritten with a short plain-language summary on top (the model comes from the `RELEASE_NOTES_MODEL` variable); otherwise the generated notes stay as they are. If a job fails, re-run only the failed job from the Actions page; to rebuild the jar of an existing tag, run the `Release` workflow with that tag, and the `CurseForge` workflow with that tag to upload it.
 
 ## License
 
