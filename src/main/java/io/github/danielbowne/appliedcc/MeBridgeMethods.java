@@ -343,9 +343,17 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return storageAvailable(host, AEKeyType.fluids());
     }
 
+    /** getStorageInfo(): {items = {total, used, available}, fluids = {...}, other = {[keyTypeId] = {...}}} from one scan. */
+    @LuaFunction(mainThread = true)
+    public MethodResult getStorageInfo(IInWorldGridNodeHost host) throws LuaException {
+        IGrid grid = infoGrid(host);
+        return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.storageInfo(grid));
+    }
+
     @LuaFunction(mainThread = true)
     public MethodResult getChannelInfo(IInWorldGridNodeHost host) throws LuaException {
-        IGrid grid = infoGrid(host);
+        // not requiring an active node: while the network boots the node is inactive, and that is when isBooting matters
+        IGrid grid = infoGrid(host, false);
         return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.channelInfo(grid));
     }
 
@@ -355,13 +363,25 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.devices(grid));
     }
 
-    /** getPatterns([filter]): the patterns of every craftable that matches the filter, capped at NetworkInfo.MAX_PATTERNS. */
+    /**
+     * getPatterns([filter]): the patterns of every craftable whose key matches the filter (so the
+     * filter matches primary outputs), capped. {alternatives = false} leaves possibleInputs out.
+     */
     @LuaFunction(mainThread = true)
     public MethodResult getPatterns(IInWorldGridNodeHost host, IArguments args) throws LuaException {
+        boolean alternatives = true;
+        if (args.count() > 0 && args.get(0) != null && !(args.get(0) instanceof String)) {
+            Map<?, ?> t = args.getTable(0);
+            if (t.containsKey("input") || t.containsKey("output")) {
+                throw new LuaException("getPatterns takes a normal filter (name, tag as \"#c:ingots\", displayName, type, keyType) "
+                        + "that is matched against the pattern's primary output; {input = ..., output = ...} is not supported");
+            }
+            alternatives = !Boolean.FALSE.equals(t.get("alternatives"));
+        }
         Filter f = Filter.opt(args, 0, 1);
         IGrid grid = infoGrid(host);
         if (grid == null) return notConnected(null);
-        NetworkInfo.Patterns p = NetworkInfo.patterns(grid, f::matches);
+        NetworkInfo.Patterns p = NetworkInfo.patterns(grid, f::matches, alternatives);
         return p.truncated() ? MethodResult.of(p.list(), "TRUNCATED") : MethodResult.of(p.list());
     }
 
@@ -373,8 +393,12 @@ public final class MeBridgeMethods implements GenericPeripheral {
 
     /** The grid for the network info methods: the config gate first, then the usual connected check. */
     private static IGrid infoGrid(IInWorldGridNodeHost host) throws LuaException {
+        return infoGrid(host, true);
+    }
+
+    private static IGrid infoGrid(IInWorldGridNodeHost host, boolean requireActive) throws LuaException {
         Config.require(Config.ALLOW_NETWORK_INFO, "Network info");
-        return grid(host);
+        return grid(host, requireActive);
     }
 
     private static MethodResult storageBytes(IInWorldGridNodeHost host, AEKeyType type, boolean total) throws LuaException {
@@ -677,9 +701,15 @@ public final class MeBridgeMethods implements GenericPeripheral {
     }
 
     static Map<String, Object> stack(AEKey key, long amount, ICraftingService cs) {
+        return stack(key, amount, cs, null);
+    }
+
+    /** names, when given, memoizes display names for the duration of one call. */
+    static Map<String, Object> stack(AEKey key, long amount, ICraftingService cs, Map<AEKey, String> names) {
         Map<String, Object> m = new HashMap<>();
         m.put("name", key.getId().toString());
-        m.put("displayName", key.getDisplayName().getString());
+        m.put("displayName", names == null ? key.getDisplayName().getString()
+                : names.computeIfAbsent(key, k -> k.getDisplayName().getString()));
         m.put("count", amount);
         m.put("amount", amount);
         m.put("isCraftable", cs != null && cs.isCraftable(key));
