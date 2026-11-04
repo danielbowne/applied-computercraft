@@ -36,8 +36,10 @@ final class Config {
         ALLOW_NETWORK_INFO = b.comment("Allow the read-only network inspection methods: getDrives, getCells, the storage capacity",
                         "methods, getChannelInfo, getDevices, getPatterns, getPatternCapacity and getPendingRequests.")
                 .define("allowNetworkInfo", true);
-        ALLOW_FLUX_CONTROL = b.comment("Allow setFluxMode and setFluxFastMode (changing the IO mode of an AppliedFlux Flux Accessor).",
-                        "getFluxMode only reads it and is not affected.")
+        ALLOW_FLUX_CONTROL = b.comment("Allow setFluxMode and setFluxFastMode (changing the IO mode of an Applied Flux Flux Accessor).",
+                        "getFluxMode only reads it and is not affected.",
+                        "Output and both let neighbouring blocks pull FE out of the network, so servers that turn off",
+                        "allowExport probably want this off too.")
                 .define("allowFluxControl", true);
         EXPOSE_DRIVE_POSITIONS = b.comment("Include the block position of each drive and ME chest in getDrives and getCells.",
                         "Set false to hide where the storage of a network is.")

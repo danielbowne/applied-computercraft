@@ -6,6 +6,7 @@ import com.mojang.logging.LogUtils;
 import dan200.computercraft.api.lua.LuaException;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.entity.BlockEntity;
+import net.neoforged.fml.ModList;
 import org.slf4j.Logger;
 
 import java.lang.reflect.InvocationTargetException;
@@ -16,21 +17,23 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Read and change the IO mode of an AppliedFlux Flux Accessor, block or cable-mounted part.
- * AppliedFlux is an optional dependency, so nothing here names one of its classes at compile time:
- * the classes and methods are looked up once by reflection (see {@link #API}) and every failure to
- * do so, including a missing mod, means "not available".
+ * Read and change the IO mode of an Applied Flux Flux Accessor, block or cable-mounted part.
+ * Applied Flux is an optional dependency, so nothing here names one of its classes at compile time:
+ * the classes and methods are looked up once by reflection (see {@link Holder#API}) and every failure
+ * to do so, including a missing mod, means "not available" ({@link #unavailableStatus()} says which).
  *
- * <p>Only the two accessor classes are matched, not AppliedFlux's IEnergyDistributor interface:
+ * <p>Only the two accessor classes are matched, not Applied Flux's IEnergyDistributor interface:
  * its mixins add that interface to AE2's interfaces and pattern providers, where the IO methods are
  * inert defaults.
  *
- * <p>AppliedFlux's setIOMode and setFastMode only store the field. Its own GUI does the same and
- * relies on the value being saved with the next chunk save, so after a change this class marks the
- * block entity (or the part's host) as needing a save. No client update is needed: the accessor's
- * screen reads the values through the menu, and the block has no mode-dependent model.
+ * <p>Applied Flux's setIOMode and setFastMode only store the field. Its own screen does the same, so
+ * a change made there is only saved if something else happens to dirty the chunk. After a change
+ * this class marks the block entity (or the part's host) as needing a save. No client update is
+ * needed: the accessor's screen reads the values through the menu, and the block has no
+ * mode-dependent model. A write that would not change the value is skipped, with no save mark.
  */
 final class FluxControl {
     private static final Logger LOG = LogUtils.getLogger();
@@ -40,7 +43,13 @@ final class FluxControl {
     private static final String IO_CLASS = "com.glodblock.github.appflux.api.EnergyIO";
 
     static final String STATUS_MISSING = "APPFLUX_NOT_LOADED";
+    /** Applied Flux is loaded but its Flux Accessor classes are not what this class expects. */
+    static final String STATUS_INCOMPATIBLE = "APPFLUX_INCOMPATIBLE";
+    private static final String APPFLUX_MOD_ID = "appflux";
     static final String STATUS_NOT_ACCESSOR = "NOT_FLUX_ACCESSOR";
+
+    /** A reflective failure at call time is logged at warn once, then at debug, so a script in a loop cannot flood the log. */
+    private static final AtomicBoolean WARNED = new AtomicBoolean();
 
     private FluxControl() {}
 
@@ -57,7 +66,7 @@ final class FluxControl {
 
     private record Api(Handles tile, Handles part, Object[] modes) {}
 
-    /** Resolved on first use. Empty when AppliedFlux is absent or is a version with a different API. */
+    /** Resolved on first use. Empty when Applied Flux is absent or is a version with a different API. */
     private static final class Holder {
         static final Optional<Api> API = load();
 
@@ -71,17 +80,23 @@ final class FluxControl {
                 Handles part = Handles.of(Class.forName(PART_CLASS, false, cl), io);
                 return Optional.of(new Api(tile, part, modes));
             } catch (ClassNotFoundException e) {
-                LOG.debug("AppliedFlux is not present, getFluxMode and setFluxMode are unavailable");
+                LOG.debug("Applied Flux classes not found, getFluxMode and setFluxMode are unavailable");
             } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
-                LOG.warn("AppliedFlux is present but its Flux Accessor API is not what Applied ComputerCraft expects", e);
+                LOG.warn("Applied Flux is present but its Flux Accessor API is not what Applied ComputerCraft expects", e);
             }
             return Optional.empty();
         }
     }
 
-    /** True when AppliedFlux's accessor classes were found. */
+    /** True when Applied Flux's accessor classes were found. */
     static boolean available() {
         return Holder.API.isPresent();
+    }
+
+    /** Why {@link #available()} is false: the mod is not installed, or it is but its API differs. */
+    static String unavailableStatus() {
+        ModList mods = ModList.get();
+        return mods != null && mods.isLoaded(APPFLUX_MOD_ID) ? STATUS_INCOMPATIBLE : STATUS_MISSING;
     }
 
     /** One accessor: the object, its handles, and what to call to have it saved. */
@@ -105,13 +120,15 @@ final class FluxControl {
             return (Boolean) invoke(handles.isFast(), accessor);
         }
 
-        /** mode is already validated by {@link FluxControl#parseMode}. */
+        /** mode is already validated by {@link FluxControl#parseMode}. Does nothing when it is the current mode. */
         void setMode(Object mode) throws LuaException {
+            if (mode.equals(invoke(handles.getMode(), accessor))) return;
             invoke(handles.setMode(), accessor, mode);
             markSaved.run();
         }
 
         void setFast(boolean fast) throws LuaException {
+            if (fast == fast()) return;
             invoke(handles.setFast(), accessor, fast);
             markSaved.run();
         }
@@ -141,13 +158,13 @@ final class FluxControl {
         return new Target(found.get(0), api.part(), partHost::markForSave);
     }
 
-    /** "input", "output" or "both" (any case) as AppliedFlux's EnergyIO constant. */
+    /** "input", "output" or "both" (any case) as Applied Flux's EnergyIO constant. */
     static Object parseMode(String text) throws LuaException {
         String t = text.toLowerCase(Locale.ROOT);
         for (Object mode : Holder.API.orElseThrow().modes()) {
             if (((Enum<?>) mode).name().toLowerCase(Locale.ROOT).equals(t)) return mode;
         }
-        throw new LuaException("Unknown flux mode \"" + text + "\": use \"input\", \"output\" or \"both\"");
+        throw new LuaException("Unknown Flux Accessor mode \"" + text + "\": use \"input\", \"output\" or \"both\"");
     }
 
     /** A side argument: a compass direction, "up"/"top" or "down"/"bottom"; null for no argument. */
@@ -174,12 +191,19 @@ final class FluxControl {
         try {
             return m.invoke(target, args);
         } catch (InvocationTargetException e) {
-            Throwable cause = e.getCause() != null ? e.getCause() : e;
-            LOG.warn("{} failed on {}", m.getName(), target.getClass().getName(), cause);
-            throw new LuaException("The Flux Accessor refused the call: " + cause);
+            logFailure(m, target, e.getCause() != null ? e.getCause() : e);
+            throw new LuaException("The Flux Accessor failed, see the server log");
         } catch (IllegalAccessException | RuntimeException e) {
-            LOG.warn("Calling {} on {} failed", m.getName(), target.getClass().getName(), e);
-            throw new LuaException("Could not call the Flux Accessor: " + e);
+            logFailure(m, target, e);
+            throw new LuaException("Could not call the Flux Accessor, see the server log");
+        }
+    }
+
+    private static void logFailure(Method m, Object target, Throwable cause) {
+        if (WARNED.compareAndSet(false, true)) {
+            LOG.warn("Calling {} on {} failed (further failures are logged at debug)", m.getName(), target.getClass().getName(), cause);
+        } else {
+            LOG.debug("Calling {} on {} failed", m.getName(), target.getClass().getName(), cause);
         }
     }
 }
