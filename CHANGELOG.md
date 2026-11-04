@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/danielbowne/applied-computercraft/compare/v0.4.0...v0.5.0) (2026-11-04)
+
+
+### Features
+
+* add getFluxMode, setFluxMode and setFluxFastMode for Applied Flux Flux Accessors ([#11](https://github.com/danielbowne/applied-computercraft/issues/11)) ([dba7b1b](https://github.com/danielbowne/applied-computercraft/commit/dba7b1beff4611e1ecb8a9018e9bd7125bf185b8))
+
 ## [0.4.0](https://github.com/danielbowne/applied-computercraft/compare/v0.3.0...v0.4.0) (2026-11-04)
 
 
