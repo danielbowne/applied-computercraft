@@ -386,7 +386,7 @@ public final class MeBridgeMethods implements GenericPeripheral {
     }
 
     /**
-     * getPatternCapacity(): {used, total, free, hosts = {{name, id, count, used, total, free}, ...}},
+     * getPatternCapacity(): {used, total, free, hosts = {{name, displayName, count, used, total, free}, ...}},
      * the pattern slots of every pattern provider and Assembler Matrix pattern core on the grid.
      */
     @LuaFunction(mainThread = true)

@@ -5,6 +5,7 @@ import appeng.api.implementations.blockentities.IChestOrDrive;
 import appeng.api.inventories.InternalInventory;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridNode;
+import appeng.api.networking.crafting.ICraftingProvider;
 import appeng.api.networking.crafting.ICraftingService;
 import appeng.api.networking.pathing.IPathingService;
 import appeng.api.stacks.AEItemKey;
@@ -14,7 +15,7 @@ import appeng.api.stacks.GenericStack;
 import appeng.api.storage.cells.CellState;
 import appeng.api.storage.cells.IBasicCellItem;
 import appeng.api.storage.cells.StorageCell;
-import appeng.helpers.patternprovider.PatternProviderLogicHost;
+import appeng.helpers.patternprovider.PatternContainer;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.Nameable;
@@ -43,7 +44,10 @@ import java.util.function.Predicate;
 /**
  * Read-only network inspection behind getDrives, getCells, the storage capacity methods,
  * getChannelInfo, getDevices, getPatterns, getPatternCapacity and getPendingRequests. Everything here uses
- * appeng.api only. Callers hold the main thread and have already passed the config gate.
+ * appeng.api, with one deliberate exception: getPatternCapacity reads appeng.helpers.patternprovider.PatternContainer,
+ * the interface AE2's own pattern terminal uses, because it is the only common type of AE2 pattern
+ * providers and of add-on ones (AdvancedAE's Advanced Pattern Provider is not a PatternProviderLogicHost).
+ * Callers hold the main thread and have already passed the config gate.
  */
 final class NetworkInfo {
     private static final Logger LOG = LogUtils.getLogger();
@@ -367,47 +371,59 @@ final class NetworkInfo {
 
     // ---------------------------------------------------------------- pattern capacity
 
-    /** Per kind of host: how many there are and their pattern slots. Keyed by block (or part item) id. */
+    /** Per kind of host (keyed by block or part item id): how many there are and their pattern slots. */
     private static final class PatternKind {
-        final String id;
         final String name;
+        final String displayName;
         long count;
         long used;
         long total;
 
-        PatternKind(String id, String name) {
-            this.id = id;
+        PatternKind(String name, String displayName) {
             this.name = name;
+            this.displayName = displayName;
         }
     }
 
     /**
-     * Add-on machines that keep patterns without implementing PatternProviderLogicHost (ExtendedAE's
-     * Assembler Matrix Pattern Core) expose them through a public no-arg getPatternInventory() that
-     * returns an InternalInventory. There is no compile dependency on them, so it is found by
-     * reflection, once per class; a class without the method is remembered too.
+     * Machines that hold patterns without being a PatternContainer. Only real crafting providers
+     * (ICraftingProvider) are considered, and only when they have a public no-arg
+     * getPatternInventory() returning an InternalInventory. That is how add-on blocks without the AE2
+     * interface expose their slots (RBMAddon's Blood Altar Assembler); a machine that is not a
+     * provider (AdvancedAE's Quantum Crafter keeps its own recipe slots there) is left out. There is
+     * no compile dependency on any add-on, so it is found by reflection, once per class; a class
+     * without the method is remembered too.
      */
     private static final ClassValue<Optional<Method>> PATTERN_INV_METHOD = new ClassValue<>() {
         @Override
         protected Optional<Method> computeValue(Class<?> type) {
+            if (PatternContainer.class.isAssignableFrom(type) || !ICraftingProvider.class.isAssignableFrom(type)) {
+                return Optional.empty();
+            }
             try {
                 Method m = type.getMethod("getPatternInventory");
                 if (InternalInventory.class.isAssignableFrom(m.getReturnType())) return Optional.of(m);
-            } catch (NoSuchMethodException | SecurityException | LinkageError e) {
-                // not a machine with a pattern inventory
+            } catch (NoSuchMethodException e) {
+                LOG.debug("{} has no getPatternInventory()", type.getName());
+            } catch (RuntimeException | LinkageError e) {
+                LOG.debug("Looking up getPatternInventory() on {} failed", type.getName(), e);
             }
             return Optional.empty();
         }
     };
 
+    private static boolean holdsPatterns(Class<?> c) {
+        return PatternContainer.class.isAssignableFrom(c) || PATTERN_INV_METHOD.get(c).isPresent();
+    }
+
     /** The pattern slots of one grid machine, or null when it has none (or the add-on's method failed). */
     private static InternalInventory patternInventory(Object owner) {
         try {
-            if (owner instanceof PatternProviderLogicHost h) return h.getLogic().getPatternInv();
+            if (owner instanceof PatternContainer pc) return pc.getTerminalPatternInventory();
             Optional<Method> m = PATTERN_INV_METHOD.get(owner.getClass());
             if (m.isEmpty()) return null;
             return (InternalInventory) m.get().invoke(owner);
-        } catch (ReflectiveOperationException | RuntimeException e) {
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
             // One misbehaving add-on host must not take the whole count down: leave it out.
             LOG.debug("Reading the pattern slots of {} failed", owner.getClass().getName(), e);
             return null;
@@ -415,12 +431,14 @@ final class NetworkInfo {
     }
 
     /**
-     * Pattern slots used and free over every pattern holder on the grid: AE2 pattern providers
-     * (blocks and parts, and add-ons built on PatternProviderLogicHost) and add-on machines with a
-     * getPatternInventory(), such as the Assembler Matrix Pattern Cores. Machines are found the
-     * way drives() does it: IGrid.getMachines only matches the exact class a machine registered
-     * under, so walk the machine classes and read each node's owner. Classes that cannot hold
-     * patterns are skipped without touching their nodes. Each inventory and each owner counts once.
+     * Pattern slots used and free over every pattern holder on the grid. Holders are the machines
+     * that implement AE2's PatternContainer (AE2 pattern providers, block and part, and add-ons such
+     * as AdvancedAE's Advanced Pattern Provider and ExtendedAE's Assembler Matrix Pattern Core, which
+     * is the same inventory the pattern terminal lists), plus crafting providers with a
+     * getPatternInventory() (see {@link #PATTERN_INV_METHOD}). Machines are found the way drives()
+     * does it: IGrid.getMachines only matches the exact class a machine registered under, so walk
+     * the machine classes and read each node's owner. Classes that cannot hold patterns are skipped
+     * without touching their nodes. Each owner and each inventory counts once.
      */
     static Map<String, Object> patternCapacity(IGrid grid) {
         Map<String, PatternKind> kinds = new LinkedHashMap<>();
@@ -429,7 +447,7 @@ final class NetworkInfo {
         long used = 0;
         long total = 0;
         for (Class<?> c : grid.getMachineClasses()) {
-            if (!PatternProviderLogicHost.class.isAssignableFrom(c) && PATTERN_INV_METHOD.get(c).isEmpty()) continue;
+            if (!holdsPatterns(c)) continue;
             for (IGridNode n : grid.getMachineNodes(c)) {
                 Object owner = n.getOwner();
                 if (owner == null || !seenOwners.add(owner)) continue;
@@ -441,25 +459,29 @@ final class NetworkInfo {
                     for (int i = 0; i < size; i++) {
                         if (!inv.getStackInSlot(i).isEmpty()) filled++;
                     }
-                    String[] idAndName = hostKind(owner, n);
-                    PatternKind k = kinds.computeIfAbsent(idAndName[0], id -> new PatternKind(id, idAndName[1]));
+                    String kind = hostKind(owner, n);
+                    PatternKind k = kinds.get(kind);
+                    if (k == null) {
+                        k = new PatternKind(kind, hostDisplayName(owner, n));
+                        kinds.put(kind, k);
+                    }
                     k.count++;
                     k.used += filled;
                     k.total += size;
                     used += filled;
                     total += size;
-                } catch (RuntimeException e) {
+                } catch (RuntimeException | LinkageError e) {
                     LOG.debug("Counting the pattern slots of {} failed", owner.getClass().getName(), e);
                 }
             }
         }
         List<PatternKind> sorted = new ArrayList<>(kinds.values());
-        sorted.sort(Comparator.<PatternKind>comparingLong(k -> k.total).reversed().thenComparing(k -> k.id));
+        sorted.sort(Comparator.<PatternKind>comparingLong(k -> k.total).reversed().thenComparing(k -> k.name));
         List<Object> hosts = new ArrayList<>();
         for (PatternKind k : sorted) {
             Map<String, Object> m = new HashMap<>();
             m.put("name", k.name);
-            m.put("id", k.id);
+            m.put("displayName", k.displayName);
             m.put("count", k.count);
             m.put("used", k.used);
             m.put("total", k.total);
@@ -474,16 +496,23 @@ final class NetworkInfo {
         return out;
     }
 
-    /** {registry id, display name} of a pattern holder: its block, or for a part (no block) the item it shows as. */
-    private static String[] hostKind(Object owner, IGridNode node) {
+    /**
+     * Registry id of a pattern holder's kind: its block, or for a part (no block) the item it shows
+     * as; "unknown" when it is neither, as in devices(). Cheap, so it is done per host; the display
+     * name is only resolved when the kind is first seen.
+     */
+    private static String hostKind(Object owner, IGridNode node) {
         if (owner instanceof BlockEntity be) {
-            Block block = be.getBlockState().getBlock();
-            return new String[] {BuiltInRegistries.BLOCK.getKey(block).toString(), block.getName().getString()};
+            return BuiltInRegistries.BLOCK.getKey(be.getBlockState().getBlock()).toString();
         }
         AEItemKey vis = node.getVisualRepresentation();
-        if (vis != null) return new String[] {vis.getId().toString(), vis.getDisplayName().getString()};
-        String cls = owner.getClass().getName();
-        return new String[] {cls, owner.getClass().getSimpleName()};
+        return vis == null ? "unknown" : vis.getId().toString();
+    }
+
+    private static String hostDisplayName(Object owner, IGridNode node) {
+        if (owner instanceof BlockEntity be) return be.getBlockState().getBlock().getName().getString();
+        AEItemKey vis = node.getVisualRepresentation();
+        return vis == null ? "Unknown" : vis.getDisplayName().getString();
     }
 
     // ---------------------------------------------------------------- patterns and requests
