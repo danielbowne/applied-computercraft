@@ -88,6 +88,9 @@ jobs:
           name: release-jar
           path: dist/
           retention-days: 7
+          # Lets "Re-run all jobs" replace the artifact instead of failing with 409. Prefer
+          # re-running only the failed jobs.
+          overwrite: true
 
   publish:
     needs: build

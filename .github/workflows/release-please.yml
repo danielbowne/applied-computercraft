@@ -17,8 +17,10 @@ name: Release Please
 #    starts nothing by itself and nothing runs twice.
 #
 # One-time setup, owner only: a GitHub App with Contents, Pull requests and Issues read-write,
-# webhook off, installed only on this repository; repository variable RELEASE_APP_ID and
-# repository secret RELEASE_APP_PRIVATE_KEY.
+# webhook off, installed only on this repository; repository variable RELEASE_APP_CLIENT_ID (the
+# App's Client ID); a `release` environment, limited to the main branch, holding the secrets
+# RELEASE_APP_PRIVATE_KEY and ANTHROPIC_API_KEY (the two jobs that read them name that
+# environment, so a run from any other branch cannot read them).
 on:
   push:
     branches: [main]
@@ -34,6 +36,7 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: read
     outputs:
@@ -46,7 +49,7 @@ jobs:
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: app-token
         with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
@@ -75,6 +78,7 @@ jobs:
     needs: [release-please, jar]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
+    environment: release
     continue-on-error: true
     permissions:
       contents: write
@@ -112,6 +116,11 @@ jobs:
           set -uo pipefail
           warn() { echo "::warning::Release notes not rewritten: $1"; exit 0; }
 
+          # Scratch files live in RUNNER_TEMP, not in the checked-out workspace.
+          repo="$GITHUB_WORKSPACE"
+          mkdir -p "$RUNNER_TEMP/release-notes" || warn "no scratch directory"
+          cd "$RUNNER_TEMP/release-notes" || warn "no scratch directory"
+
           cat > system.md <<'PROMPT'
           You write the release notes for Applied ComputerCraft, a Minecraft mod that adds a ComputerCraft peripheral named me_bridge to Applied Energistics 2 blocks, so Lua programs can read and control an AE2 network.
 
@@ -142,18 +151,18 @@ jobs:
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > original.md || warn "could not read the release body"
           test -s original.md || warn "the release body is empty"
 
-          prev=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
+          prev=$(git -C "$repo" describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
           if [ -n "$prev" ]; then
             base="$prev"; range="$prev..$TAG"
           else
-            base=$(git hash-object -t tree /dev/null); range="$TAG"
+            base=$(git -C "$repo" hash-object -t tree /dev/null); range="$TAG"
           fi
 
           # Write each part to a file first and cut it with head afterwards: piping git into
           # `head -c` makes git exit 141 under pipefail once the output passes the cap.
-          git log "$range" --format='%s%n%n%b%n---' > part.log || true
-          git diff --stat "$base" "$TAG" > part.stat || true
-          git diff "$base" "$TAG" -- src/main/java README.md > part.diff || true
+          git -C "$repo" log "$range" --format='%s%n%n%b%n---' > part.log || true
+          git -C "$repo" diff --stat "$base" "$TAG" > part.stat || true
+          git -C "$repo" diff "$base" "$TAG" -- src/main/java README.md > part.diff || true
 
           # About 60k characters in total: notes 10k, commits 14k, stat 4k, diff 30k, then a hard cap.
           {
@@ -196,16 +205,19 @@ jobs:
           test "$stop" != "max_tokens" || warn "the answer was cut off at max_tokens"
           jq -r '.content[] | select(.type == "text") | .text' response.json > final.raw || warn "could not read the answer"
 
+          # --- guard begin
           # Belt and braces for the house rules: no em dashes, no tool names.
           sed "s/$(printf '\342\200\224')/-/g" final.raw > final.md
           grep -q '[^[:space:]]' final.md || warn "the answer was empty"
           if grep -qiE 'claude|anthropic' final.md; then warn "the answer named the tool"; fi
 
-          # The rewrite may reorganize the text but must not add anything that renders or notifies.
-          if grep -qiE '!\[|<img|<a |<script|<iframe' final.md; then
-            warn "the answer contains an image, link tag, script or iframe"
+          # Cheap pre-checks on the text. The rewrite may reorganize the original but must not add
+          # anything that renders as a link, image or mention. These are case-insensitive and
+          # reject the usual spellings; the rendered comparison below is what catches the rest.
+          if grep -qiE '!\[|<img|<a([[:space:]]|$)|<script|<iframe|&#|www\.|\]\(//' final.md; then
+            warn "the answer contains an image, link tag, script, iframe, entity, www link or protocol-relative link"
           fi
-          urls() { { grep -oE 'https?://[^) >"]+' "$1" || true; } | sed -E 's/[.,;:]+$//' | sort -u; }
+          urls() { { grep -oiE 'https?://[^) >"]+' "$1" || true; } | sed -E 's/[.,;:]+$//' | sort -u; }
           urls original.md > original.urls
           urls final.md > final.urls
           comm -13 original.urls final.urls > added.txt
@@ -222,14 +234,32 @@ jobs:
             warn "the answer added an @mention"
           fi
 
-          # Every link in the original notes must survive the rewrite.
-          { grep -oE 'https://github\.com/[^) >]+' original.md || true; } | sort -u | while read -r url; do
-            grep -qF "$url" final.md || echo "$url"
-          done > missing.txt
-          if test -s missing.txt; then
-            echo "Links missing from the rewrite:"; cat missing.txt
-            warn "the answer dropped links from the original notes"
+          # Render both with GitHub's own Markdown renderer and compare what actually becomes a
+          # link, image or user mention (every one of them is an href or src in the HTML). Any
+          # spelling the pre-checks miss (entities, odd casing, autolinks) shows up here. If the
+          # render call fails, fail closed: keep the original notes.
+          render() {
+            jq -n --rawfile t "$1" --arg c "$GITHUB_REPOSITORY" '{text: $t, mode: "gfm", context: $c}' |
+              gh api markdown --input -
+          }
+          targets() { { grep -oiE '(href|src)="[^"]*"' "$1" || true; } | sort -u; }
+          render original.md > original.html || warn "could not render the original notes"
+          render final.md > final.html || warn "could not render the rewrite"
+          test -s original.html || warn "the rendered original notes were empty"
+          test -s final.html || warn "the rendered rewrite was empty"
+          targets original.html > original.targets
+          targets final.html > final.targets
+          comm -13 original.targets final.targets > added.targets
+          comm -23 original.targets final.targets > missing.targets
+          if test -s added.targets; then
+            echo "Link, image or mention targets not in the original notes:"; cat added.targets
+            warn "the rewrite adds a link, image or mention"
           fi
+          if test -s missing.targets; then
+            echo "Link targets missing from the rewrite:"; cat missing.targets
+            warn "the rewrite drops a link from the original notes"
+          fi
+          # --- guard end
 
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file final.md || warn "could not update the release"
           echo "Release notes for $TAG rewritten with $MODEL"
