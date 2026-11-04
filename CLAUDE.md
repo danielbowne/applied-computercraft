@@ -14,6 +14,7 @@ src/main/java/io/github/danielbowne/appliedcc/
   Config.java           server config (config/appliedcc-server.toml) and the require() gate
   CraftJobs.java        per-computer pending crafting requests and the me_crafting event
   MeBridgeMethods.java  every Lua-visible method, filter parsing, export and import
+  FluxControl.java      reflective access to AppliedFlux's Flux Accessor IO mode (optional dependency, no compile reference)
 src/main/templates/META-INF/neoforge.mods.toml   mod metadata, filled from gradle.properties
 .github/workflows/      build.yml (every push and PR), release-please.yml (push to main: release PR, then the release), release.yml (jar for a tag), curseforge.yml (CurseForge upload for a tag)
 release-please-config.json, .release-please-manifest.json   release-please settings and the last released version

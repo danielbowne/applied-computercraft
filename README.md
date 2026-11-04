@@ -89,6 +89,54 @@ Applied Replicatics' matter shows up the same way, as `keyType` `apprep:m`. For 
 **Energy**
 - `getStoredEnergy()`, `getEnergyCapacity()`, `getEnergyUsage()`, `getAverageEnergyInput()`, `getEnergyInfo()`. These also work when the network is out of power.
 
+**Flux Accessor** (needs the optional Applied Flux mod)
+
+Read and change the IO mode of an Applied Flux Flux Accessor when the bridge is attached to one. The accessor block shows up to a computer as an `me_bridge` like any other AE2 block; a Flux Accessor part on a cable works too.
+
+- `getFluxMode([side])`: `{mode, fast}`. `mode` is `"input"` (the accessor only takes FE into the network), `"output"` (it only pushes FE from the network into neighbouring blocks) or `"both"`. `fast` is Applied Flux's fast mode switch.
+- `setFluxMode(mode [, side])`: sets the mode to `"input"`, `"output"` or `"both"` (any case) and returns `true`. A bad mode throws an error. The change is saved with the world, like a change made in the accessor's screen.
+- `setFluxFastMode(fast [, side])`: turns fast mode on or off and returns `true`.
+- `side` only matters on a cable that carries more than one Flux Accessor part (`"up"`, `"down"`, `"north"`, `"south"`, `"east"`, `"west"`); with several and no `side` the call throws an error. A Flux Accessor block ignores it.
+- On a block that is not a Flux Accessor, or when Applied Flux is not installed, `getFluxMode` returns `nil` and `setFluxMode` / `setFluxFastMode` return `false`, plus the status `NOT_FLUX_ACCESSOR` or `APPFLUX_NOT_LOADED`.
+- `getFluxMode` is read-only and works like the energy readouts. `setFluxMode` and `setFluxFastMode` need `allowFluxControl` (on by default). Neither needs the network to be powered.
+
+Guarded use, so the same script also runs on a version of this mod without the methods:
+
+```lua
+local bridge = peripheral.find("me_bridge")
+if bridge.setFluxMode then
+  local info, err = bridge.getFluxMode()
+  if info then
+    print("flux accessor is in " .. info.mode .. " mode")
+    bridge.setFluxMode("both")
+  else
+    print("not a flux accessor: " .. err)
+  end
+end
+```
+
+A reserve guard: stop the network feeding FE to the machines around the accessor when the stored FE runs low, and let it feed them again once it has recovered. The gap between the two thresholds stops it from flipping back and forth around one value. Run it on a computer next to the accessor: the accessor is on the network, so the same bridge reads the FE count (key type `appflux:flux`) and changes the mode.
+
+```lua
+local bridge = peripheral.find("me_bridge")
+local LOW, HIGH = 1000000, 1500000   -- FE; HIGH is LOW plus the hysteresis
+if not bridge.setFluxMode then error("update Applied ComputerCraft") end
+
+while true do
+  local fe = bridge.getResource({keyType = "appflux:flux"})
+  local stored = fe and fe.count or 0
+  local info = bridge.getFluxMode()
+  if info then
+    if stored < LOW and info.mode ~= "input" then
+      bridge.setFluxMode("input")     -- keep the reserve: only charge the network
+    elseif stored > HIGH and info.mode ~= "both" then
+      bridge.setFluxMode("both")
+    end
+  end
+  sleep(5)
+end
+```
+
 **Network info**
 
 Read-only methods that describe the network itself. They need `allowNetworkInfo` (on by default) and a powered, active network, like the other methods.
@@ -154,6 +202,7 @@ This mod shares no code with Advanced Peripherals and isn't affiliated with it.
 | `enabled` | true | master switch |
 | `allowExport`, `allowImport`, `allowCrafting`, `allowCancel` | true | turn single features off |
 | `allowOnCables` | true | set false so only full AE2 blocks work, not cables and parts |
+| `allowFluxControl` | true | turns off `setFluxMode` and `setFluxFastMode` (`getFluxMode` only reads) |
 | `allowNetworkInfo` | true | turns off `getDrives`, `getCells`, `getStorageInfo` and the storage capacity methods, `getChannelInfo`, `getDevices`, `getPatterns`, `getPatternCapacity` and `getPendingRequests` |
 | `exposeDrivePositions` | true | set false to leave the `position` out of `getDrives` and `getCells` |
 | `maxPendingCraftsPerComputer` | 8 | |
