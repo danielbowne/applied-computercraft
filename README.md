@@ -89,6 +89,70 @@ Applied Replicatics' matter shows up the same way, as `keyType` `apprep:m`. For 
 **Energy**
 - `getStoredEnergy()`, `getEnergyCapacity()`, `getEnergyUsage()`, `getAverageEnergyInput()`, `getEnergyInfo()`. These also work when the network is out of power.
 
+**Flux Accessor** (needs the optional Applied Flux mod)
+
+Read and change the IO mode of an Applied Flux Flux Accessor when the bridge is attached to one. The accessor block shows up to a computer as an `me_bridge` like any other AE2 block; a Flux Accessor part on a cable works too.
+
+- `getFluxMode([side])`: `{mode, fast}`.
+  - `"input"`: the accessor only takes FE into the network. It neither pushes FE out nor lets neighbouring blocks pull it out.
+  - `"output"`: it pushes FE from the network into neighbouring blocks, and neighbours can pull FE out of the network through it.
+  - `"both"`: input and output together.
+  - `fast` is Applied Flux's fast mode: the accessor then outputs every tick, which can cost server performance. There is no `getFluxFastMode`; read `fast` from this table.
+- `setFluxMode(mode [, side])`: sets the mode to `"input"`, `"output"` or `"both"` (any case) and returns `true`. A bad mode throws an error. A change is marked for saving with the world (Applied Flux's own screen does not do that, so a change made there can be lost if nothing else saves the chunk); setting the mode it already has changes and saves nothing.
+- `setFluxFastMode(fast [, side])`: turns fast mode on or off and returns `true`.
+- `side` is the absolute world face a part sits on (`"up"`/`"top"`, `"down"`/`"bottom"`, `"north"`, `"south"`, `"east"`, `"west"`), not relative to the computer; `"left"`, `"right"`, `"front"` and `"back"` are rejected with an error. It only matters on a cable that carries more than one Flux Accessor part. With several and no `side` the call throws an error (a missing argument, not a status), so a script on such a cable should pass `side` or wrap the call in `pcall`. A Flux Accessor block ignores `side`.
+- Statuses, returned as the second value with `nil` (`getFluxMode`) or `false` (the setters):
+  - `NOT_FLUX_ACCESSOR`: the block or cable is not a Flux Accessor (for example a controller or an interface).
+  - `APPFLUX_NOT_LOADED`: Applied Flux is not installed.
+  - `APPFLUX_INCOMPATIBLE`: Applied Flux is installed but its Flux Accessor API is not the one this mod expects (an Applied Flux version this mod does not support). Details are in the server log.
+- Gating: `setFluxMode` and `setFluxFastMode` need `allowFluxControl` and `enabled` (on by default), plus `allowOnCables` when the accessor is a cable part. `getFluxMode` needs only `enabled` (plus `allowOnCables` for a part) and never touches the grid. The calls work while the network is unpowered, but the new mode only has an effect once the accessor is powered and active.
+
+Guarded use, so the same script also runs on a version of this mod without the methods:
+
+```lua
+local bridge = peripheral.find("me_bridge")
+if bridge.setFluxMode then
+  local info, err = bridge.getFluxMode()
+  if info then
+    print("flux accessor is in " .. info.mode .. " mode")
+    bridge.setFluxMode("both")
+  else
+    print("not a flux accessor: " .. err)
+  end
+end
+```
+
+A reserve guard: stop the network feeding FE to the machines around the accessor when the stored FE runs low, and let it feed them again once it has recovered. The gap between the two thresholds stops it from flipping back and forth around one value. Run it on a computer next to the accessor: the accessor is on the network, so the same bridge reads the FE count (key type `appflux:flux`) and changes the mode. A poll that fails (for example `NOT_CONNECTED`) is skipped rather than counted as 0 FE.
+
+```lua
+local LOW, HIGH = 1000000, 1500000   -- FE; HIGH is LOW plus the hysteresis
+
+-- pick the bridge that is a flux accessor, not just any me_bridge
+local bridge = peripheral.find("me_bridge", function(_, p)
+  return p.getFluxMode ~= nil and p.getFluxMode() ~= nil
+end)
+if not bridge then error("no me_bridge on a Flux Accessor (needs Applied Flux and a recent Applied ComputerCraft)") end
+
+while true do
+  local fe, err = bridge.getResource({keyType = "appflux:flux"})
+  if fe then
+    local info = bridge.getFluxMode()
+    if info then
+      if fe.count < LOW and info.mode ~= "input" then
+        bridge.setFluxMode("input")     -- keep the reserve: only charge the network
+      elseif fe.count > HIGH and info.mode ~= "both" then
+        bridge.setFluxMode("both")
+      end
+    end
+  else
+    print("skipping this poll: " .. tostring(err))
+  end
+  sleep(5)
+end
+```
+
+If Applied Flux's self-charge is on (`[flux_accessor] enable` in `appflux-common.toml`), the `"input"` mode also stops the accessor from charging the network's AE power from the stored FE (Applied Flux only does that while the accessor can output). A reserve guard on a network that is powered that way can therefore brown the network out.
+
 **Network info**
 
 Read-only methods that describe the network itself. They need `allowNetworkInfo` (on by default) and a powered, active network, like the other methods.
@@ -154,11 +218,14 @@ This mod shares no code with Advanced Peripherals and isn't affiliated with it.
 | `enabled` | true | master switch |
 | `allowExport`, `allowImport`, `allowCrafting`, `allowCancel` | true | turn single features off |
 | `allowOnCables` | true | set false so only full AE2 blocks work, not cables and parts |
+| `allowFluxControl` | true | turns off `setFluxMode` and `setFluxFastMode`; `getFluxMode` is read-only and stays on |
 | `allowNetworkInfo` | true | turns off `getDrives`, `getCells`, `getStorageInfo` and the storage capacity methods, `getChannelInfo`, `getDevices`, `getPatterns`, `getPatternCapacity` and `getPendingRequests` |
 | `exposeDrivePositions` | true | set false to leave the `position` out of `getDrives` and `getCells` |
 | `maxPendingCraftsPerComputer` | 8 | |
 
 AE2 has no access control of its own. Anyone who can place a computer next to a block of your network can read it and, with the defaults, move items in and out. On public servers, think about turning off `allowOnCables` and the features you don't want, or rely on claim protection to keep strangers away from your blocks.
+
+`allowFluxControl` matters for the same reason as `allowExport`: switching a Flux Accessor to `output` or `both` lets neighbouring blocks pull FE out of the network. A server that turns off `allowExport` probably wants `allowFluxControl` off as well.
 
 The network info methods (`allowNetworkInfo`) are read-only but they show how the network is built: what is in each cell, how many devices of each kind there are and what is being crafted. `getDrives` and `getCells` also return the coordinates of every drive and ME Chest, and they can be read from any block of the network, including one on the far side of a quantum bridge or a P2P tunnel, so someone who can reach any part of your network can learn where your storage is. `exposeDrivePositions` defaults to true on purpose, because Advanced Peripherals returns positions too and scripts ported from it expect them. On a public server, set `exposeDrivePositions = false`, and `allowNetworkInfo = false` if you don't want any of this readable.
 

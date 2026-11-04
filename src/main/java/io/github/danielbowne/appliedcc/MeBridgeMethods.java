@@ -297,6 +297,62 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return MethodResult.of(m);
     }
 
+    // ---------------------------------------------------------------- flux accessor
+
+    /**
+     * getFluxMode([side]): {mode = "input"|"output"|"both", fast = boolean} of the Applied Flux Flux
+     * Accessor this bridge is attached to. Read-only, so it is gated like the energy readouts (the
+     * master switch and allowOnCables), not by allowFluxControl. On a cable with several accessors
+     * pass the side of the one you mean.
+     */
+    @LuaFunction(mainThread = true)
+    public MethodResult getFluxMode(IInWorldGridNodeHost host, IArguments args) throws LuaException {
+        checkAllowed(host);
+        Direction side = FluxControl.parseSide(args.optString(0, null));
+        FluxControl.Target t = fluxTarget(host, side);
+        return t == null ? fluxStatus(null) : MethodResult.of(FluxControl.describe(t));
+    }
+
+    /**
+     * setFluxMode(mode [, side]): "input", "output" or "both" (any case). Input only accepts FE into
+     * the network, output only pushes FE from the network into neighbours. Returns true.
+     */
+    @LuaFunction(mainThread = true)
+    public MethodResult setFluxMode(IInWorldGridNodeHost host, IArguments args) throws LuaException {
+        Config.require(Config.ALLOW_FLUX_CONTROL, "Flux Accessor control");
+        checkAllowed(host);
+        String text = args.getString(0);
+        Direction side = FluxControl.parseSide(args.optString(1, null));
+        if (!FluxControl.available()) return fluxStatus(false);
+        Object mode = FluxControl.parseMode(text);
+        FluxControl.Target t = fluxTarget(host, side);
+        if (t == null) return fluxStatus(false);
+        t.setMode(mode);
+        return MethodResult.of(true);
+    }
+
+    /** setFluxFastMode(fast [, side]): Applied Flux's fast mode switch of the accessor. Returns true. */
+    @LuaFunction(mainThread = true)
+    public MethodResult setFluxFastMode(IInWorldGridNodeHost host, IArguments args) throws LuaException {
+        Config.require(Config.ALLOW_FLUX_CONTROL, "Flux Accessor control");
+        checkAllowed(host);
+        boolean fast = args.getBoolean(0);
+        Direction side = FluxControl.parseSide(args.optString(1, null));
+        FluxControl.Target t = fluxTarget(host, side);
+        if (t == null) return fluxStatus(false);
+        t.setFast(fast);
+        return MethodResult.of(true);
+    }
+
+    /** The accessor behind the host, or null when Applied Flux is missing or the host is not an accessor. */
+    private static FluxControl.Target fluxTarget(IInWorldGridNodeHost host, Direction side) throws LuaException {
+        return FluxControl.available() ? FluxControl.find(host, side) : null;
+    }
+
+    private static MethodResult fluxStatus(Object value) {
+        return MethodResult.of(value, FluxControl.available() ? FluxControl.STATUS_NOT_ACCESSOR : FluxControl.unavailableStatus());
+    }
+
     // ---------------------------------------------------------------- network info
 
     /** getDrives(): one entry per ME Drive and ME Chest on the grid, with the cells in them. */
