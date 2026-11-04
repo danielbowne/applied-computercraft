@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/danielbowne/applied-computercraft/compare/v0.3.0...v0.4.0) (2026-11-04)
+
+
+### Features
+
+* add getPatternCapacity for pattern slot usage ([#9](https://github.com/danielbowne/applied-computercraft/issues/9)) ([8e47544](https://github.com/danielbowne/applied-computercraft/commit/8e47544c0ca948eb1beabdd715294ff4fc866812))
+
 ## [0.3.0](https://github.com/danielbowne/applied-computercraft/compare/v0.2.0...v0.3.0) (2026-11-04)
 
 
