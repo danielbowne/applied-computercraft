@@ -12,6 +12,8 @@ final class Config {
     static final ModConfigSpec.BooleanValue ALLOW_CRAFTING;
     static final ModConfigSpec.BooleanValue ALLOW_CANCEL;
     static final ModConfigSpec.BooleanValue ALLOW_ON_CABLES;
+    static final ModConfigSpec.BooleanValue ALLOW_NETWORK_INFO;
+    static final ModConfigSpec.BooleanValue EXPOSE_DRIVE_POSITIONS;
     static final ModConfigSpec.IntValue MAX_PENDING_CRAFTS;
 
     static {
@@ -30,6 +32,12 @@ final class Config {
                         "Set false on public servers so only full AE2 blocks (controller, interface, drive...) work,",
                         "which makes it harder to tap someone else's network from a cable.")
                 .define("allowOnCables", true);
+        ALLOW_NETWORK_INFO = b.comment("Allow the read-only network inspection methods: getDrives, getCells, the storage capacity",
+                        "methods, getChannelInfo, getDevices, getPatterns and getPendingRequests.")
+                .define("allowNetworkInfo", true);
+        EXPOSE_DRIVE_POSITIONS = b.comment("Include the block position of each drive and ME chest in getDrives and getCells.",
+                        "Set false to hide where the storage of a network is.")
+                .define("exposeDrivePositions", true);
         MAX_PENDING_CRAFTS = b.comment("Crafting requests a single computer may have calculating at once.")
                 .defineInRange("maxPendingCraftsPerComputer", 8, 1, 256);
         SPEC = b.build();

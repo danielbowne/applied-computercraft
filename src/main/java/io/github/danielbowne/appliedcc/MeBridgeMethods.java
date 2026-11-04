@@ -15,6 +15,7 @@ import appeng.api.parts.IPartHost;
 import appeng.api.stacks.AEFluidKey;
 import appeng.api.stacks.AEItemKey;
 import appeng.api.stacks.AEKey;
+import appeng.api.stacks.AEKeyType;
 import appeng.api.storage.AEKeyFilter;
 import appeng.api.storage.MEStorage;
 import com.mojang.logging.LogUtils;
@@ -294,6 +295,124 @@ public final class MeBridgeMethods implements GenericPeripheral {
         m.put("input", e.getAvgPowerInjection());
         m.put("powered", e.isNetworkPowered());
         return MethodResult.of(m);
+    }
+
+    // ---------------------------------------------------------------- network info
+
+    /** getDrives(): one entry per ME Drive and ME Chest on the grid, with the cells in them. */
+    @LuaFunction(mainThread = true)
+    public MethodResult getDrives(IInWorldGridNodeHost host) throws LuaException {
+        IGrid grid = infoGrid(host);
+        return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.drivesInfo(grid));
+    }
+
+    /** getCells(): the same per-cell entries as getDrives, as one flat list. */
+    @LuaFunction(mainThread = true)
+    public MethodResult getCells(IInWorldGridNodeHost host) throws LuaException {
+        IGrid grid = infoGrid(host);
+        return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.cellsInfo(grid));
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getTotalItemStorage(IInWorldGridNodeHost host) throws LuaException {
+        return storageBytes(host, AEKeyType.items(), true);
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getUsedItemStorage(IInWorldGridNodeHost host) throws LuaException {
+        return storageBytes(host, AEKeyType.items(), false);
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getAvailableItemStorage(IInWorldGridNodeHost host) throws LuaException {
+        return storageAvailable(host, AEKeyType.items());
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getTotalFluidStorage(IInWorldGridNodeHost host) throws LuaException {
+        return storageBytes(host, AEKeyType.fluids(), true);
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getUsedFluidStorage(IInWorldGridNodeHost host) throws LuaException {
+        return storageBytes(host, AEKeyType.fluids(), false);
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getAvailableFluidStorage(IInWorldGridNodeHost host) throws LuaException {
+        return storageAvailable(host, AEKeyType.fluids());
+    }
+
+    /** getStorageInfo(): {items = {total, used, available}, fluids = {...}, other = {[keyTypeId] = {...}}} from one scan. */
+    @LuaFunction(mainThread = true)
+    public MethodResult getStorageInfo(IInWorldGridNodeHost host) throws LuaException {
+        IGrid grid = infoGrid(host);
+        return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.storageInfo(grid));
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getChannelInfo(IInWorldGridNodeHost host) throws LuaException {
+        // not requiring an active node: while the network boots the node is inactive, and that is when isBooting matters
+        IGrid grid = infoGrid(host, false);
+        return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.channelInfo(grid));
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getDevices(IInWorldGridNodeHost host) throws LuaException {
+        IGrid grid = infoGrid(host);
+        return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.devices(grid));
+    }
+
+    /**
+     * getPatterns([filter]): the patterns of every craftable whose key matches the filter (so the
+     * filter matches primary outputs), capped. {alternatives = false} leaves possibleInputs out.
+     */
+    @LuaFunction(mainThread = true)
+    public MethodResult getPatterns(IInWorldGridNodeHost host, IArguments args) throws LuaException {
+        boolean alternatives = true;
+        if (args.count() > 0 && args.get(0) != null && !(args.get(0) instanceof String)) {
+            Map<?, ?> t = args.getTable(0);
+            if (t.containsKey("input") || t.containsKey("output")) {
+                throw new LuaException("getPatterns takes a normal filter (name, tag as \"#c:ingots\", displayName, type, keyType) "
+                        + "that is matched against the pattern's primary output; {input = ..., output = ...} is not supported");
+            }
+            alternatives = !Boolean.FALSE.equals(t.get("alternatives"));
+        }
+        Filter f = Filter.opt(args, 0, 1);
+        IGrid grid = infoGrid(host);
+        if (grid == null) return notConnected(null);
+        NetworkInfo.Patterns p = NetworkInfo.patterns(grid, f::matches, alternatives);
+        return p.truncated() ? MethodResult.of(p.list(), "TRUNCATED") : MethodResult.of(p.list());
+    }
+
+    @LuaFunction(mainThread = true)
+    public MethodResult getPendingRequests(IInWorldGridNodeHost host) throws LuaException {
+        IGrid grid = infoGrid(host);
+        return grid == null ? notConnected(null) : MethodResult.of(NetworkInfo.pendingRequests(grid));
+    }
+
+    /** The grid for the network info methods: the config gate first, then the usual connected check. */
+    private static IGrid infoGrid(IInWorldGridNodeHost host) throws LuaException {
+        return infoGrid(host, true);
+    }
+
+    private static IGrid infoGrid(IInWorldGridNodeHost host, boolean requireActive) throws LuaException {
+        Config.require(Config.ALLOW_NETWORK_INFO, "Network info");
+        return grid(host, requireActive);
+    }
+
+    private static MethodResult storageBytes(IInWorldGridNodeHost host, AEKeyType type, boolean total) throws LuaException {
+        IGrid grid = infoGrid(host);
+        if (grid == null) return notConnected(0);
+        long[] bytes = NetworkInfo.storage(grid, type);
+        return MethodResult.of(total ? bytes[0] : bytes[1]);
+    }
+
+    private static MethodResult storageAvailable(IInWorldGridNodeHost host, AEKeyType type) throws LuaException {
+        IGrid grid = infoGrid(host);
+        if (grid == null) return notConnected(0);
+        long[] bytes = NetworkInfo.storage(grid, type);
+        return MethodResult.of(bytes[0] - bytes[1]);
     }
 
     // ---------------------------------------------------------------- moving stuff
@@ -581,10 +700,16 @@ public final class MeBridgeMethods implements GenericPeripheral {
         return m;
     }
 
-    private static Map<String, Object> stack(AEKey key, long amount, ICraftingService cs) {
+    static Map<String, Object> stack(AEKey key, long amount, ICraftingService cs) {
+        return stack(key, amount, cs, null);
+    }
+
+    /** names, when given, memoizes display names for the duration of one call. */
+    static Map<String, Object> stack(AEKey key, long amount, ICraftingService cs, Map<AEKey, String> names) {
         Map<String, Object> m = new HashMap<>();
         m.put("name", key.getId().toString());
-        m.put("displayName", key.getDisplayName().getString());
+        m.put("displayName", names == null ? key.getDisplayName().getString()
+                : names.computeIfAbsent(key, k -> k.getDisplayName().getString()));
         m.put("count", amount);
         m.put("amount", amount);
         m.put("isCraftable", cs != null && cs.isCraftable(key));
